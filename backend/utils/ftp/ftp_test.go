@@ -136,7 +136,17 @@ func TestCreateReadDeleteUseLoginRelativeKeys(t *testing.T) {
 	if err := client.UploadCreate(context.Background(), key, bytes.NewReader([]byte("replacement"))); err == nil {
 		t.Fatal("existing object was overwritten")
 	}
-	body, _, err := client.GetFileStream(key)
+	conn, err := client.GetClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := conn.Retr(ObjectPath(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(reader)
+	// The data transfer must finish before the shared control connection accepts the next command.
+	_ = reader.Close()
 	if err != nil || string(body) != "original" {
 		t.Fatal("read did not use the created object", string(body), err)
 	}

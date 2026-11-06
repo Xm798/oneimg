@@ -279,29 +279,6 @@ func (c *WebDAVClient) WebDAVDelete(ctx context.Context, path string) error {
 	return fmt.Errorf("删除失败，状态码：%d", resp.StatusCode)
 }
 
-// WebDAVGetFile 获取文件流
-func (c *WebDAVClient) WebDAVGetFile(ctx context.Context, path string) (*http.Response, error) {
-	cleanPath := c.NormalizePath(path)
-	fullURL := c.objectURL(cleanPath)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("构建GET请求失败：%w", err)
-	}
-
-	if c.config.Username != "" && c.config.Password != "" {
-		req.SetBasicAuth(c.config.Username, c.config.Password)
-	}
-	req.Header.Set("User-Agent", "OneIMG-Proxy/1.0")
-
-	client := &http.Client{Timeout: c.config.Timeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("GET请求失败：%w", err)
-	}
-	return resp, nil
-}
-
 // WebDAVMedia bounds connection/header waits but leaves streaming lifetime to the request context.
 func (c *WebDAVClient) WebDAVMedia(ctx context.Context, path, method, byteRange, ifRange string, validators ...string) (*http.Response, error) {
 	if method != http.MethodGet && method != http.MethodHead {

@@ -48,7 +48,6 @@ func findDuplicateUploadResult(c *gin.Context, bucket *models.Buckets, contentHa
 	if strings.TrimSpace(contentHash) == "" || bucket == nil {
 		return nil
 	}
-	log.Println("检查重复图片")
 	db := database.GetDB()
 	if db == nil {
 		return nil
@@ -65,10 +64,8 @@ func findDuplicateUploadResult(c *gin.Context, bucket *models.Buckets, contentHa
 		return nil
 	}
 	if result.RowsAffected == 0 {
-		log.Println("未发现重复图片，继续上传")
 		return nil
 	}
-	log.Printf("发现重复图片，跳过上传: %s", imageModel.Url)
 
 	return &interfaces.ImageUploadResult{
 		Success:          true,

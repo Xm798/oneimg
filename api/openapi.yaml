@@ -253,7 +253,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/Page' }
         - { $ref: '#/components/parameters/PageSize' }
-        - { $ref: '#/components/parameters/Sort' }
+        - { $ref: '#/components/parameters/ImageSort' }
         - { $ref: '#/components/parameters/Order' }
         - name: q
           in: query
@@ -505,7 +505,7 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/Page' }
         - { $ref: '#/components/parameters/PageSize' }
-        - { $ref: '#/components/parameters/Sort' }
+        - { $ref: '#/components/parameters/UserSort' }
         - { $ref: '#/components/parameters/Order' }
         - { name: id, in: query, schema: { type: integer, minimum: 1 } }
         - name: username
@@ -618,7 +618,8 @@ components:
     TagID: { name: tag_id, in: path, required: true, schema: { type: integer, minimum: 1 } }
     Page: { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
     PageSize: { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
-    Sort: { name: sort, in: query, schema: { type: string } }
+    ImageSort: { name: sort, in: query, schema: { type: string, enum: [created_at, file_size, filename, id], default: created_at } }
+    UserSort: { name: sort, in: query, schema: { type: string, enum: [id, username, created_at], default: id } }
     Order: { name: order, in: query, schema: { type: string, enum: [asc, desc] } }
   requestBodies:
     Login:

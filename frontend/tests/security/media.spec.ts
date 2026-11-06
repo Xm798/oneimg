@@ -1,19 +1,9 @@
-import { test, expect, type BrowserContext, type Locator, type Page } from '@playwright/test'
+import { test, expect, type Locator, type Page } from '@playwright/test'
 
-let cookies: Awaited<ReturnType<BrowserContext['cookies']>>
-let user: Record<string, unknown>
-test.beforeAll(async ({ request }) => {
-  const response = await request.post('/api/v1/auth/login', { data: { username: 'browser-test', password: 'browser-test-password' } })
-  expect(response.ok()).toBeTruthy()
-  user = (await response.json()).data
-  cookies = (await request.storageState()).cookies
-})
-test.beforeEach(async ({ context, page }) => {
-  await context.addCookies(cookies)
-  await page.addInitScript(data => {
-    localStorage.setItem('userInfo', JSON.stringify(data))
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
     Object.assign(window, { previewInjected: 0, svgInjected: 0 })
-  }, user)
+  })
 })
 
 const injected = (page: Page) => page.evaluate(() => (window as unknown as { previewInjected: number }).previewInjected)

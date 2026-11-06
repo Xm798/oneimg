@@ -133,7 +133,7 @@ func TestLocalUploadOutsideUploadsPathStaysInUploadsDirectory(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
 	c.Set("user_id", 1)
-	result, err := (&DefaultUploader{}).Upload(c, &setting, &models.Buckets{Id: 1, Type: "default"}, uploadHeader(t, "photo.png", "image/png", buf.Bytes()))
+	result, err := (&createdUploader{}).Upload(c, &setting, &models.Buckets{Id: 1, Type: "default"}, uploadHeader(t, "photo.png", "image/png", buf.Bytes()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestExclusiveLocalCreationAndSameNameAcrossUsers(t *testing.T) {
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = httptest.NewRequest("POST", "/", nil)
 		c.Set("user_id", user)
-		result, err := (&DefaultUploader{}).Upload(c, &setting, &bucket, header)
+		result, err := (&createdUploader{}).Upload(c, &setting, &bucket, header)
 		if err != nil {
 			t.Fatal(err)
 		}

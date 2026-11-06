@@ -1,5 +1,5 @@
 import { computed, reactive, ref, watch } from 'vue'
-import { api, ApiError, type Image } from '@/api/client.ts'
+import { api, ApiError, errorMessage, UPLOAD_RESULT_UNKNOWN, type Image } from '@/api/client.ts'
 import { toast } from '@/components/ui/toast'
 import { useSession } from '@/composables/useSession'
 import { useTags } from '@/composables/useTags'
@@ -188,8 +188,9 @@ export const addFiles = async (input: FileList | File[]) => {
 }
 
 const problemDetail = (error: unknown, fallback: string) => {
-  if (error instanceof ApiError) return error.problem?.detail || fallback
+  if (error instanceof ApiError) return errorMessage(error, fallback)
   if (error instanceof Error && error.message === 'Network request failed') return '网络连接失败'
+  if (error instanceof Error && error.message === UPLOAD_RESULT_UNKNOWN) return '上传结果未知，请到图库确认'
   return fallback
 }
 

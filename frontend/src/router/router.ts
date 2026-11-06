@@ -1,7 +1,8 @@
-import { apiFetch } from "@/api/client.ts"
+import { apiFetch, type User } from "@/api/client.ts"
 import { createRouter, createWebHistory, type RouteComponent, type RouteLocationNormalized, type RouteMeta, type RouteRecordRaw } from 'vue-router'
 import { canAccessRoute, setSessionUser, clearSession, type SessionUser } from '@/composables/useSession'
 import { loadSiteConfig, useSite } from '@/composables/useSite'
+import { toast } from '@/components/ui/toast'
 import { navItem } from './nav'
 
 const site = useSite()
@@ -55,58 +56,91 @@ const router = createRouter({
 
 const getPageTitle = (to: RouteLocationNormalized) => to.meta.title ? `${to.meta.title} - ${site.title}` : site.title
 
-router.beforeEach(async (to) => {
-  try {
-    await loadSiteConfig()
-    document.title = getPageTitle(to)
+const loginRedirect = (to: RouteLocationNormalized) => to.fullPath === '/' ? '/login' : { path: '/login', query: { redirect: to.fullPath } }
 
-    if (to.meta.public) return true
-
-    // 验证本地登录信息
-    let userInfo: SessionUser = {}
-    try {
-      userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
-    } catch {
-      userInfo = {}
-    }
-    // 未登录时记下原地址，登录后回到这里
-    if (!userInfo.username) {
-      clearSession()
-      return to.fullPath === '/' ? '/login' : { path: '/login', query: { redirect: to.fullPath } }
-    }
-
-    // 向服务器确认登录状态，并刷新角色、权限和改密要求
-    const response = await apiFetch('/api/v1/me')
-    if (!response.ok) {
-      clearSession()
-      throw new Error(`登录状态验证失败：${response.status}`)
-    }
-    const result = await response.json()
-    if (!result.data?.username || userInfo.username !== result.data.username) {
-      clearSession()
-      return '/login'
-    }
-
-    const current: SessionUser = {
-      ...userInfo,
-      id: result.data.id ?? userInfo.id,
-      role: result.data.role,
-      permission: result.data.permission || { codes: [], bucket_ids: [] },
-      password_change_required: result.data.password_change_required,
-      bootstrap_verification_required: result.data.bootstrap_verification_required,
-    }
-    setSessionUser(current)
-
-    // 需要改密时只允许进入账户设置；无权访问的页面回到上传页
-    if (!canAccessRoute(String(to.name), to.meta.permissions, current)) {
-      return current.password_change_required ? '/account' : '/upload'
-    }
-    return true
-  } catch {
-    // 会话失效：回到登录页，登录后返回原地址
-    if (to.path === '/login') return true
-    return to.fullPath === '/' ? '/login' : { path: '/login', query: { redirect: to.fullPath } }
+const accessTarget = (to: RouteLocationNormalized, user: SessionUser) => {
+  // 需要改密时只允许进入账户设置；无权访问的页面回到上传页
+  if (!canAccessRoute(String(to.name), to.meta.permissions, user)) {
+    return user.password_change_required ? '/account' : '/upload'
   }
+  return true
+}
+
+const TRANSIENT_NOTICE_INTERVAL = 30_000
+let lastTransientNotice = 0
+
+const noticeTransientFailure = () => {
+  const now = Date.now()
+  if (now - lastTransientNotice < TRANSIENT_NOTICE_INTERVAL) return
+  lastTransientNotice = now
+  toast.error('暂时无法确认登录状态，请稍后重试')
+}
+
+type MeResult = { kind: 'ok'; data: Partial<User> } | { kind: 'unauthorized' } | { kind: 'transient' }
+
+const fetchMe = async (): Promise<MeResult> => {
+  let response: Response
+  try {
+    response = await apiFetch('/api/v1/me')
+  } catch {
+    return { kind: 'transient' }
+  }
+  if (response.status === 401 || response.status === 403) return { kind: 'unauthorized' }
+  if (!response.ok) return { kind: 'transient' }
+  try {
+    const result = await response.json()
+    return { kind: 'ok', data: result?.data ?? {} }
+  } catch {
+    return { kind: 'transient' }
+  }
+}
+
+router.beforeEach(async (to) => {
+  await loadSiteConfig()
+  document.title = getPageTitle(to)
+
+  if (to.meta.public) return true
+
+  // 验证本地登录信息
+  let userInfo: SessionUser = {}
+  try {
+    userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
+  } catch {
+    userInfo = {}
+  }
+  // 未登录时记下原地址，登录后回到这里
+  if (!userInfo.username) {
+    clearSession()
+    return loginRedirect(to)
+  }
+
+  // 向服务器确认登录状态，并刷新角色、权限和改密要求
+  const me = await fetchMe()
+  if (me.kind === 'unauthorized') {
+    // 会话失效：回到登录页，登录后返回原地址
+    clearSession()
+    return loginRedirect(to)
+  }
+  if (me.kind === 'transient') {
+    // 服务器暂时不可用时沿用本地登录信息；接口本身仍会逐个鉴权，下次导航再确认
+    noticeTransientFailure()
+    return accessTarget(to, userInfo)
+  }
+  if (!me.data.username || userInfo.username !== me.data.username) {
+    clearSession()
+    return '/login'
+  }
+
+  const current: SessionUser = {
+    ...userInfo,
+    id: me.data.id ?? userInfo.id,
+    role: me.data.role,
+    permission: me.data.permission || { codes: [], bucket_ids: [] },
+    password_change_required: me.data.password_change_required,
+    bootstrap_verification_required: me.data.bootstrap_verification_required,
+  }
+  setSessionUser(current)
+  return accessTarget(to, current)
 })
 
 // 被取消的导航（如设置页「留在本页」）也会调用 afterEach，这时不改标题

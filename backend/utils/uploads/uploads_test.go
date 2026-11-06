@@ -81,3 +81,15 @@ func TestGetStorageUploaderRejectsRemovedTelegramStorage(t *testing.T) {
 		t.Fatal("GetStorageUploader() should reject removed Telegram storage")
 	}
 }
+
+func TestGetStorageUploaderSupportsEveryStorageType(t *testing.T) {
+	for _, storageType := range []string{"default", "r2", "s3", "webdav", "ftp"} {
+		uploader, err := GetStorageUploader(&models.Buckets{Type: storageType})
+		if err != nil || uploader == nil {
+			t.Fatalf("GetStorageUploader(%q) = %v, %v; want uploader", storageType, uploader, err)
+		}
+	}
+	if uploader, err := GetStorageUploader(&models.Buckets{Type: "gcs"}); err == nil || uploader != nil {
+		t.Fatalf("GetStorageUploader(gcs) = %v, %v; want error", uploader, err)
+	}
+}

@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test'
+import { AUTH_STATE } from './tests/security/global-setup'
 
 export default defineConfig({
   testDir: './tests/security',
@@ -7,7 +8,8 @@ export default defineConfig({
   retries: 0,
   timeout: 30_000,
   globalTimeout: 180_000,
-  use: { baseURL: 'http://127.0.0.1:18089', trace: 'retain-on-failure', launchOptions: { timeout: 30_000 } },
+  globalSetup: './tests/security/global-setup.ts',
+  use: { baseURL: 'http://127.0.0.1:18089', storageState: AUTH_STATE, trace: 'retain-on-failure', launchOptions: { timeout: 30_000 } },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
     { name: 'firefox', use: { ...devices['Desktop Firefox'] } },

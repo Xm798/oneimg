@@ -27,25 +27,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type R2Uploader struct{}
-type S3Uploader struct{}
-type WebDAVUploader struct{}
-type DefaultUploader struct{}
-type FTPUploader struct{}
+type createdUploader struct{}
 
-func (*R2Uploader) Upload(c *gin.Context, s *models.Settings, b *models.Buckets, f *multipart.FileHeader) (*interfaces.ImageUploadResult, error) {
-	return uploadCreated(c, s, b, f)
-}
-func (*S3Uploader) Upload(c *gin.Context, s *models.Settings, b *models.Buckets, f *multipart.FileHeader) (*interfaces.ImageUploadResult, error) {
-	return uploadCreated(c, s, b, f)
-}
-func (*WebDAVUploader) Upload(c *gin.Context, s *models.Settings, b *models.Buckets, f *multipart.FileHeader) (*interfaces.ImageUploadResult, error) {
-	return uploadCreated(c, s, b, f)
-}
-func (*DefaultUploader) Upload(c *gin.Context, s *models.Settings, b *models.Buckets, f *multipart.FileHeader) (*interfaces.ImageUploadResult, error) {
-	return uploadCreated(c, s, b, f)
-}
-func (*FTPUploader) Upload(c *gin.Context, s *models.Settings, b *models.Buckets, f *multipart.FileHeader) (*interfaces.ImageUploadResult, error) {
+func (*createdUploader) Upload(c *gin.Context, s *models.Settings, b *models.Buckets, f *multipart.FileHeader) (*interfaces.ImageUploadResult, error) {
 	return uploadCreated(c, s, b, f)
 }
 

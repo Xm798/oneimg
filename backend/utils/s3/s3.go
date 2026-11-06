@@ -46,32 +46,24 @@ func NewS3Client(setting models.Settings, buckets models.Buckets) (*s3.Client, e
 		return nil, fmt.Errorf("S3/R2配置缺失 [bucket:%s, endpoint:%s]", bucket, endpoint)
 	}
 
-	// 创建AWS配置
 	awsCfg, err := awsconfig.LoadDefaultConfig(context.TODO(),
 		awsconfig.WithRegion(region),
-		awsconfig.WithEndpointResolverWithOptions(aws.EndpointResolverWithOptionsFunc(
-			func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-				return aws.Endpoint{
-					URL:               endpoint,
-					HostnameImmutable: true,
-				}, nil
-			},
-		)),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			accessKey,
 			secretKey,
 			"", // Token
 		)),
 	)
-
 	if err != nil {
 		return nil, fmt.Errorf("加载 AWS 配置失败: %w", err)
 	}
 
-	// 创建S3客户端
-	client := s3.NewFromConfig(awsCfg)
-
-	return client, err
+	// BaseEndpoint alone lets the SDK rewrite to bucket.host, which breaks MinIO and
+	// IP endpoints; path-style keeps the configured host as the request host.
+	return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(endpoint)
+		o.UsePathStyle = true
+	}), nil
 }
 
 func GetObject(client s3.Client, ctx context.Context, input *s3.GetObjectInput) (*s3.GetObjectOutput, error) {

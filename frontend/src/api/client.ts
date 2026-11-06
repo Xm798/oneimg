@@ -45,6 +45,15 @@ export const fieldErrors = (error: unknown): Record<string, string> => {
 
 const baseURL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
 
+/** 只接受秒数形式的 Retry-After；HTTP 日期等其他形式视为未提供 */
+export const parseRetryAfter = (value: string | null): number | undefined => {
+  const seconds = Number(value)
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined
+}
+
+/** 上传请求已发出但拿不到可解析的成功响应：记录可能已经创建 */
+export const UPLOAD_RESULT_UNKNOWN = 'Upload result unknown'
+
 /** 接口返回的站内地址（如 avatar_url）加上 API 基础地址 */
 export const resolveApiURL = (path: string) => (path.startsWith('/api/') ? `${baseURL}${path}` : path)
 
@@ -84,8 +93,7 @@ async function requestEnvelope<T>(path: string, init: RequestInit = {}): Promise
   if (response.status === 204) return { data: undefined as T }
   const payload = await response.json().catch(() => null)
   if (!response.ok) {
-    const retryAfter = Number(response.headers.get('Retry-After')) || undefined
-    throw new ApiError((payload ?? { status: response.status }) as Problem, retryAfter)
+    throw new ApiError((payload ?? { status: response.status }) as Problem, parseRetryAfter(response.headers.get('Retry-After')))
   }
   return payload as Envelope<T>
 }
@@ -167,9 +175,15 @@ function uploadWithProgress<T>(url: string, body: FormData, onProgress?: (value:
     if (token) xhr.setRequestHeader('X-OneImg-CSRF', token)
     xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress?.(Math.round(event.loaded / event.total * 100)) }
     xhr.onerror = () => reject(new Error('Network request failed'))
+    xhr.onabort = () => reject(new Error('Upload aborted'))
+    xhr.ontimeout = () => reject(new Error('Network request failed'))
     xhr.onload = () => {
-      const payload = JSON.parse(xhr.responseText || 'null') as Envelope<T> | Problem
-      if (xhr.status < 200 || xhr.status >= 300) return reject(new ApiError(payload as Problem))
+      let payload: unknown = null
+      try { payload = JSON.parse(xhr.responseText || 'null') } catch { payload = null }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        return reject(new ApiError((payload ?? { status: xhr.status }) as Problem, parseRetryAfter(xhr.getResponseHeader('Retry-After'))))
+      }
+      if (!payload || typeof payload !== 'object' || !('data' in payload)) return reject(new Error(UPLOAD_RESULT_UNKNOWN))
       resolve((payload as Envelope<T>).data)
     }
     xhr.send(body)

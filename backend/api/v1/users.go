@@ -18,6 +18,9 @@ type managedUserDTO struct {
 	PasskeyCount int64 `json:"passkey_count"`
 }
 
+// userSortFields must match the UserSort enum in api/openapi.yaml.
+var userSortFields = map[string]bool{"id": true, "username": true, "created_at": true}
+
 func (s *Server) listUsers(c *gin.Context) {
 	page, ok := parsePositiveQuery(c, "page", 1, 0)
 	if !ok {
@@ -28,7 +31,7 @@ func (s *Server) listUsers(c *gin.Context) {
 		return
 	}
 	sort := c.DefaultQuery("sort", "id")
-	if sort != "id" && sort != "username" && sort != "created_at" {
+	if !userSortFields[sort] {
 		writeProblem(c, http.StatusUnprocessableEntity, "invalid_query_parameter", "sort 参数无效")
 		return
 	}

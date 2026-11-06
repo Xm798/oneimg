@@ -362,7 +362,9 @@ export type Page = number;
 
 export type PageSize = number;
 
-export type Sort = string;
+export type ImageSort = 'created_at' | 'file_size' | 'filename' | 'id';
+
+export type UserSort = 'id' | 'username' | 'created_at';
 
 export type Order = 'asc' | 'desc';
 
@@ -964,7 +966,7 @@ export type ListImagesData = {
     query?: {
         page?: number;
         page_size?: number;
-        sort?: string;
+        sort?: 'created_at' | 'file_size' | 'filename' | 'id';
         order?: 'asc' | 'desc';
         /**
          * 首尾空白移除后按 NFC + Unicode case fold + NFC 进行包含匹配；不去重音或兼容折叠。% 匹配任意字符序列，_ 匹配归一化后一个字符，反斜杠按字面值匹配。
@@ -1650,7 +1652,7 @@ export type ListUsersData = {
     query?: {
         page?: number;
         page_size?: number;
-        sort?: string;
+        sort?: 'id' | 'username' | 'created_at';
         order?: 'asc' | 'desc';
         id?: number;
         /**

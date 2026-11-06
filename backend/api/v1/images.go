@@ -55,6 +55,9 @@ func toImageDTO(item services.ImageRecord) imageDTO {
 		BucketID: image.BucketId, UserID: image.UserId, UploaderRole: item.UploaderRole, Tags: tags, CreatedAt: image.CreatedAt.UTC()}
 }
 
+// imageSortFields must match the ImageSort enum in api/openapi.yaml.
+var imageSortFields = map[string]bool{"created_at": true, "file_size": true, "filename": true, "id": true}
+
 func (s *Server) listImages(c *gin.Context) {
 	page, ok := parsePositiveQuery(c, "page", 1, 0)
 	if !ok {
@@ -70,7 +73,7 @@ func (s *Server) listImages(c *gin.Context) {
 		return
 	}
 	sort := c.DefaultQuery("sort", "created_at")
-	if _, ok := map[string]bool{"created_at": true, "file_size": true, "filename": true, "id": true}[sort]; !ok {
+	if !imageSortFields[sort] {
 		writeProblem(c, http.StatusUnprocessableEntity, "invalid_query_parameter", "sort 参数无效")
 		return
 	}

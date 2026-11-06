@@ -8,6 +8,7 @@ services:
     container_name: oneimg
     restart: unless-stopped
     ports:
+      # 反向代理运行在宿主机时可改为 "127.0.0.1:8080:8080"，见部署指南「反向代理与可信地址」
       - "8080:8080"
     volumes:
       - ./data:/app/data

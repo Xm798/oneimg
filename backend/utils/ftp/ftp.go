@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"oneimg/backend/utils/storageobject"
 	"path"
@@ -159,33 +158,6 @@ func (f *FTPUtil) UploadImage(remotePath string, imgBytes []byte, contentType st
 	return nil
 }
 
-// GetFileStream 获取FTP文件流
-// remotePath: 远程文件路径
-// 返回值: 文件字节流、文件大小、错误
-func (f *FTPUtil) GetFileStream(remotePath string) ([]byte, int64, error) {
-	remotePath = ObjectPath(remotePath)
-	// 获取客户端
-	client, err := f.GetClient()
-	if err != nil {
-		return nil, 0, err
-	}
-
-	// 获取文件读取流
-	resp, err := client.Retr(remotePath)
-	if err != nil {
-		return nil, 0, fmt.Errorf("获取文件流失败: %w", err)
-	}
-	defer resp.Close()
-
-	// 读取文件内容
-	buf, err := io.ReadAll(resp)
-	if err != nil {
-		return nil, 0, fmt.Errorf("读取文件流失败: %w", err)
-	}
-
-	return buf, int64(len(buf)), nil
-}
-
 // DeleteImage 删除FTP服务器上的图片
 // remotePath: 远程文件路径
 func (f *FTPUtil) DeleteImage(remotePath string) error {
@@ -259,63 +231,6 @@ func (f *FTPUtil) makeDirRecursive(client *ftp.ServerConn, dir string) error {
 	}
 
 	return nil
-}
-
-// GetFileStreamReader 流式获取FTP文件
-func (f *FTPUtil) GetFileStreamReader(remotePath string) (io.ReadCloser, int64, error) {
-	client, err := f.GetClient()
-	if err != nil {
-		return nil, 0, err
-	}
-
-	// 获取文件读取流（Retr返回io.ReadCloser）
-	resp, err := client.Retr(remotePath)
-	if err != nil {
-		return nil, 0, fmt.Errorf("获取文件流失败: %w", err)
-	}
-
-	var fileSize int64 = 0
-	entries, err := client.List(remotePath)
-	if err == nil && len(entries) > 0 && entries[0] != nil {
-		// 安全转换：检查uint64是否超出int64范围
-		if entries[0].Size <= uint64(math.MaxInt64) {
-			fileSize = int64(entries[0].Size)
-		} else {
-			fileSize = 0
-		}
-	}
-
-	return resp, fileSize, nil
-}
-
-// ListFiles 列出指定目录下的文件（可选扩展）
-// remoteDir: 远程目录
-// 返回值: 文件列表、错误
-// func (f *FTPUtil) ListFiles(remoteDir string) ([]ftp.Entry, error) {
-// 	client, err := f.GetClient()
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	entries, err := client.List(remoteDir)
-// 	if err != nil {
-// 		return nil, fmt.Errorf("列出文件失败: %w", err)
-// 	}
-
-// 	return entries, nil
-// }
-
-// UploadStream writes without buffering the complete file. Cancellation closes the data connection.
-func (f *FTPUtil) UploadStream(ctx context.Context, path string, body io.Reader) error {
-	f.config.Context = ctx
-	client, err := f.GetClient()
-	if err != nil {
-		return err
-	}
-	if err = f.makeDirRecursive(client, filepath.Dir(path)); err != nil {
-		return err
-	}
-	return client.Stor(path, body)
 }
 
 // requestConn stops its cancellation callback when the FTP library closes a connection.
