@@ -120,7 +120,8 @@ jobs:
     name: Browser ${{ matrix.browser }}
     needs: [changes, frontend]
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    # Each Playwright release lists the OS images it installs browsers for; 1.56 predates ubuntu-26.04.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -161,7 +162,8 @@ jobs:
     name: PostgreSQL ${{ matrix.postgres }}
     needs: [changes, frontend]
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    # 17 runs the browser tests, so this matrix follows the browser job's image.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
