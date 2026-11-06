@@ -2,44 +2,53 @@ name: Security
 on:
   pull_request:
   push:
-    branches: [main, 'codex/**']
+    branches: ['codex/**']
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 jobs:
   security:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.10'
-      - name: Go 格式检查
+      - name: gofmt
         run: |
           unformatted="$(gofmt -l $(git ls-files --cached --others --exclude-standard '*.go'))"
           if [ -n "$unformatted" ]; then
-            echo "以下文件需要运行 gofmt -w："
+            echo "Run gofmt -w on these files:"
             echo "$unformatted"
             exit 1
           fi
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 10
-      - name: 前端及接口契约
+          package_json_file: frontend/package.json
+      - name: Frontend and API contract
         working-directory: frontend
         run: |
           pnpm install --frozen-lockfile
           pnpm run openapi:check
           pnpm run build
-      - name: 后端和竞态回归
+      - name: govulncheck
+        # Needs frontend/dist (go:embed). Advisories appear without any commit, so PRs
+        # report without failing; pushes and tags (via workflow_call) must be clean.
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: Backend and race tests
         run: |
           go test ./...
           go test -race ./...
           go vet ./...
-      - name: 浏览器安全回归
+      - name: Browser security tests
         working-directory: frontend
         run: |
           pnpm exec playwright install --with-deps chromium firefox webkit
@@ -67,28 +76,31 @@ jobs:
     env:
       ONEIMG_TEST_POSTGRES_URL: postgres://postgres:oneimg-ci-test-only@127.0.0.1:5432/oneimg_test?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.10'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 10
-      - name: 锁定依赖、接口契约和前端
+          package_json_file: frontend/package.json
+      - name: Locked dependencies, API contract and frontend
         working-directory: frontend
         run: |
           pnpm install --frozen-lockfile
           pnpm run openapi:check
           pnpm run build
-      - name: 数据库、初始化、服务、API、本地导入和停机迁移
+      - name: Database, setup, services, API, local import and offline migration
         run: go test ./...
-      - name: PostgreSQL 17 竞态检查
+      - name: PostgreSQL 17 race tests
         if: matrix.postgres == '17'
         run: go test -race ./...
-      - name: PostgreSQL 17 三浏览器回归
+      - name: PostgreSQL 17 browser security tests
         if: matrix.postgres == '17'
         working-directory: frontend
         run: |

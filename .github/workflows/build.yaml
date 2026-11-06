@@ -4,13 +4,12 @@ on:
   push:
     branches:
       - main
+      - master
     tags:
       - "v*"
   workflow_dispatch:
 
-permissions:
-  contents: read
-  packages: write
+permissions: {}
 
 concurrency:
   group: ghcr-${{ github.ref }}
@@ -18,87 +17,171 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build:
-    name: 构建并推送多架构镜像
+  preflight:
+    name: Preflight
+    # workflow_dispatch skips this job, and therefore publish: a manual run is a CI dry run.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    # 正常 17–28 分钟；QEMU 挂起时尽早失败，而不是等到 6 小时上限
-    timeout-minutes: 60
-    services:
-      postgres:
-        image: postgres:17.11
-        env:
-          POSTGRES_DB: oneimg_test
-          POSTGRES_PASSWORD: oneimg-ci-test-only
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d oneimg_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-
+    permissions:
+      contents: read
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+      publish_latest: ${{ steps.decide.outputs.publish_latest }}
+      publish_minor: ${{ steps.decide.outputs.publish_minor }}
+      publish_major: ${{ steps.decide.outputs.publish_major }}
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: 配置 Node.js
-        uses: actions/setup-node@v4
+      - name: Decide what to publish
+        id: decide
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          publish=false latest=false minor=false major=false
+          stable='^v[0-9]+\.[0-9]+\.[0-9]+$'
+          # Reads tags at run time, so re-running an old tag after a newer release leaves the aliases alone.
+          # Only default-branch tags count: a tag elsewhere is refused below and must not hold back latest.
+          highest() { git tag -l --merged "origin/${DEFAULT_BRANCH}" "$1" | { grep -E "$stable" || true; } | sort -V | tail -n 1; }
+          is_highest() { if [[ "$(highest "$1")" == "$GITHUB_REF_NAME" ]]; then echo true; else echo false; fi; }
+
+          if [[ "$GITHUB_REF_TYPE" == branch ]]; then
+            # Both main and master trigger CI so the workflow fits upstream and the fork; only the default branch publishes.
+            if [[ "$GITHUB_REF_NAME" == "$DEFAULT_BRANCH" ]]; then publish=true; fi
+          else
+            if ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::${GITHUB_REF_NAME} is not vX.Y.Z or vX.Y.Z-<pre>; refusing to publish"
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/${DEFAULT_BRANCH}"; then
+              echo "::error::${GITHUB_REF_NAME} (${GITHUB_SHA}) is not reachable from origin/${DEFAULT_BRANCH}; refusing to publish"
+              exit 1
+            fi
+            publish=true
+            if [[ "$GITHUB_REF_NAME" =~ $stable ]]; then
+              latest="$(is_highest 'v*')"
+              minor="$(is_highest "${GITHUB_REF_NAME%.*}.*")"
+              major="$(is_highest "${GITHUB_REF_NAME%%.*}.*")"
+            fi
+          fi
+
+          {
+            echo "publish=${publish}"
+            echo "publish_latest=${latest}"
+            echo "publish_minor=${minor}"
+            echo "publish_major=${major}"
+          } >> "$GITHUB_OUTPUT"
+          echo "ref=${GITHUB_REF_NAME} publish=${publish} latest=${latest} minor=${minor} major=${major}"
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
-      - name: 配置 pnpm
-        uses: pnpm/action-setup@v4
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 10
+          package_json_file: frontend/package.json
 
-      - name: 校验 OpenAPI 与前端
+      - name: Check OpenAPI and build frontend
         working-directory: frontend
         run: |
           pnpm install --frozen-lockfile
           pnpm run openapi:check
           pnpm run build
 
-      - name: 配置 Go
-        uses: actions/setup-go@v5
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.10'
 
-      - name: 后端测试
+      # PostgreSQL coverage comes from the Security workflow's postgres matrix.
+      - name: Backend tests
         run: go test ./...
 
-      - name: PostgreSQL 17 发布构建门禁
-        env:
-          ONEIMG_TEST_POSTGRES_URL: postgres://postgres:oneimg-ci-test-only@127.0.0.1:5432/oneimg_test?sslmode=disable
-        run: go test ./...
+  security:
+    name: Security
+    # A called workflow cannot exceed the permissions granted to the calling job.
+    permissions:
+      contents: read
+    uses: ./.github/workflows/security-regression.yaml
 
-      - name: 配置 QEMU
-        uses: docker/setup-qemu-action@v3
+  publish:
+    name: Build and push multi-arch image
+    needs: [preflight, test, security]
+    if: needs.preflight.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    # Normally 17–28 minutes; fail early on a QEMU hang instead of running to the 6-hour limit.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: 配置 Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
-      - name: 登录 GHCR
-        uses: docker/login-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 生成镜像标签
-        id: metadata
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=latest
-            type=ref,event=tag
-            type=sha,prefix=sha-
+      # attest-build-provenance does not lowercase subject-name, so one lowercased value feeds both actions.
+      # The repository part is fixed so a renamed fork still publishes to <owner>/oneimg.
+      - name: Image name
+        id: image
+        shell: bash
+        run: echo "name=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/oneimg" >> "$GITHUB_OUTPUT"
 
-      - name: 构建并推送镜像
-        uses: docker/build-push-action@v6
+      - name: Image tags
+        id: metadata
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.image.outputs.name }}
+          # latest=auto would add latest for every tag entry below; preflight owns that decision.
+          flavor: |
+            latest=false
+          tags: |
+            type=raw,value=edge,enable=${{ github.ref_type == 'branch' }}
+            type=sha,prefix=sha-,format=short,enable=${{ github.ref_type == 'branch' }}
+            type=ref,event=tag
+            type=semver,pattern=v{{major}}.{{minor}},enable=${{ needs.preflight.outputs.publish_minor == 'true' }}
+            type=semver,pattern=v{{major}},enable=${{ needs.preflight.outputs.publish_major == 'true' }}
+            type=raw,value=latest,enable=${{ needs.preflight.outputs.publish_latest == 'true' }}
+
+      - name: Build and push image
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true
@@ -109,3 +192,12 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: true
           sbom: true
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+          # Storage records need artifact-metadata: write and work only for organization-owned repositories.
+          create-storage-record: false
