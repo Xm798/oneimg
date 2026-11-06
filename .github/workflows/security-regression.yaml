@@ -17,12 +17,24 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.scope.outputs.code }}
+      playwright: ${{ steps.playwright.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: github.event_name == 'pull_request'
         with:
           fetch-depth: 2
           persist-credentials: false
+      # The Playwright image only carries browsers for its own release, so its tag follows the
+      # lockfile instead of being kept in sync by hand (Dependabot bumps the lockfile alone).
+      - name: Locked Playwright version
+        id: playwright
+        shell: bash
+        run: |
+          versions="$(grep -oE '^  playwright@[0-9][^:(]*:' frontend/pnpm-lock.yaml | sed -E 's/^  playwright@(.*):$/\1/' | sort -u)"
+          if [[ "$(wc -l <<< "$versions")" -ne 1 || -z "$versions" ]]; then
+            echo "::error::expected exactly one locked playwright version, found: ${versions:-none}"
+            exit 1
+          fi
+          echo "version=${versions}" >> "$GITHUB_OUTPUT"
       - name: Classify changed files
         id: scope
         shell: bash
@@ -143,10 +155,9 @@ jobs:
     needs: [changes, frontend, fixture]
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    # The image ships the browsers and their system packages; its tag must match the locked
-    # Playwright version (frontend/pnpm-lock.yaml).
+    # The image ships the browsers and their system packages for the locked Playwright release.
     container:
-      image: mcr.microsoft.com/playwright:v1.56.1-noble
+      image: mcr.microsoft.com/playwright:v${{ needs.changes.outputs.playwright }}-noble
       options: --user 1001
     strategy:
       fail-fast: false
