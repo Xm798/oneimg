@@ -42,3 +42,17 @@
 - Release 标题为 `OneImg vX.Y.Z`；正文依次为“更新内容”“升级说明”“容器镜像”，最后是加粗的“完整变更”比较链接，不重复一级标题。
 - 使用固定版本镜像示例和完整仓库文档链接。新指南在旧 tag 中不存在时链接到 `main`，先确认链接可访问，再按授权更新线上 Release 并回读核对。
 - Release 简述用户影响，保留必要的备份、兼容性、凭证撤销、部署验证边界和回滚警告；详细步骤、参数与验证方法链接分类指南，不复述手册。不单列流水线、RSS、提交哈希或镜像摘要清单，不因格式调整移动 tag、重发镜像或改写此前风格一致的 Release。
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues of `Xm798/oneimg` (via `gh`). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md`.
