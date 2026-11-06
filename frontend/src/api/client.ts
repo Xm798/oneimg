@@ -28,9 +28,7 @@ export class ApiError extends Error {
   }
 }
 
-/**
- * 请求没有拿到可用的服务器响应。result_unknown 表示请求已发出但成功响应无法解析，记录可能已经创建。
- */
+/** 未拿到可用响应。result_unknown：请求已发出但成功响应无法解析，记录可能已创建 */
 export class TransportError extends Error {
   kind: 'network' | 'aborted' | 'result_unknown'
   constructor(kind: TransportError['kind']) {
@@ -192,7 +190,7 @@ function uploadWithProgress<T>(url: string, body: FormData, onProgress?: (value:
     xhr.onabort = () => reject(new TransportError('aborted'))
     xhr.onload = () => {
       let payload: unknown = null
-      try { payload = JSON.parse(xhr.responseText || 'null') } catch { /* 非 JSON 响应按无内容处理 */ }
+      try { payload = JSON.parse(xhr.responseText || 'null') } catch {}
       if (xhr.status < 200 || xhr.status >= 300) return reject(responseError(xhr.status, payload, xhr.getResponseHeader('Retry-After')))
       if (!payload || typeof payload !== 'object' || !('data' in payload)) return reject(new TransportError('result_unknown'))
       resolve((payload as Envelope<T>).data)

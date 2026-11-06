@@ -4,8 +4,7 @@ import { request, type FullConfig } from '@playwright/test'
 
 export const AUTH_STATE = resolve(__dirname, '../../playwright/.auth/browser-test.json')
 
-// Login is rate limited per IP (10 per 5 minutes). Logging in once per run keeps worker
-// restarts after failed tests from spending that budget and failing unrelated specs.
+// Login allows 10 attempts per IP per 5 minutes; one login per run keeps worker restarts from exhausting it.
 export default async function globalSetup(config: FullConfig) {
   const baseURL = config.projects[0].use.baseURL!
   const context = await request.newContext({ baseURL })

@@ -42,8 +42,7 @@ func TestMediaLookupQueryPlanUsesIndex(t *testing.T) {
 		if err := tx.Exec("ANALYZE images").Error; err != nil {
 			return err
 		}
-		// Small test tables make a sequential scan the cheapest plan; this
-		// asks whether an index plan is available at all.
+		// Tiny tables always favour a seq scan; disabling it asks only whether an index plan exists.
 		if err := tx.Exec("SET LOCAL enable_seqscan = off").Error; err != nil {
 			return err
 		}

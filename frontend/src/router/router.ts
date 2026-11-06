@@ -60,7 +60,6 @@ const getPageTitle = (to: RouteLocationNormalized) => to.meta.title ? `${to.meta
 const loginRedirect = (to: RouteLocationNormalized) => to.fullPath === '/' ? '/login' : { path: '/login', query: { redirect: to.fullPath } }
 
 const accessTarget = (to: RouteLocationNormalized, user: SessionUser) => {
-  // 需要改密时只允许进入账户设置；无权访问的页面回到上传页
   if (!canAccessRoute(String(to.name), to.meta.permissions, user)) {
     return user.password_change_required ? '/account' : '/upload'
   }
@@ -84,23 +83,20 @@ router.beforeEach(async (to) => {
   if (to.meta.public) return true
 
   const userInfo: SessionUser = getStoredUser()
-  // 未登录时记下原地址，登录后回到这里
   if (!userInfo.username) {
     clearSession()
     return loginRedirect(to)
   }
 
-  // 向服务器确认登录状态，并刷新角色、权限和改密要求
   let me: User
   try {
     me = await api.me()
   } catch (error) {
     if (error instanceof ApiError && [401, 403].includes(Number(error.problem?.status))) {
-      // 会话失效：回到登录页，登录后返回原地址
       clearSession()
       return loginRedirect(to)
     }
-    // 服务器暂时不可用或响应无法解析时沿用本地登录信息；接口本身仍会逐个鉴权，下次导航再确认
+    // 服务器不可用时沿用本地登录信息：各接口仍独立鉴权，下次导航再确认
     noticeTransientFailure()
     return accessTarget(to, userInfo)
   }

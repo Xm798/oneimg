@@ -11,8 +11,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// Index names and column order are a contract: bucket maintenance relies on
-// idx_images_bucket_id_id being (bucket_id, id).
 var wantImageIndexes = map[string][]string{
 	"idx_images_url":           {"url"},
 	"idx_images_thumbnail":     {"thumbnail"},

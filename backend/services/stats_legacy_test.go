@@ -8,9 +8,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// legacyDashboard and legacyImageTrend are the per-statistic query
-// implementations the conditional aggregates replace; parity tests compare the
-// two on the same rows.
+// legacyDashboard and legacyImageTrend are the replaced per-statistic queries, kept as the parity reference.
 func legacyDashboard(s *StatsService, user models.User) (DashboardStats, error) {
 	var result DashboardStats
 	var err error

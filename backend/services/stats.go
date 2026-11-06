@@ -84,7 +84,6 @@ func (s *StatsService) Dashboard(user models.User) (DashboardStats, error) {
 	videoSize := sums.add("CASE WHEN " + models.VideoSQL + " THEN file_size ELSE 0 END")
 	monthColumns := sums.window(timeWindow{start: month, end: month.AddDate(0, 1, 0)})
 	trendColumns := sums.windows(trendWindows)
-	// The last trend window is today.
 	todayColumns := trendColumns[len(trendColumns)-1]
 	sizeColumns := make([]int, len(sizeRanges))
 	for i, item := range sizeRanges {
@@ -223,7 +222,6 @@ func (a *aggregate) add(expression string, args ...any) int {
 	return len(a.columns) - 1
 }
 
-// windowColumns holds the aggregate column positions of one window's counts.
 type windowColumns struct{ all, video int }
 
 func (a *aggregate) window(item timeWindow) windowColumns {
