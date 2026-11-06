@@ -254,3 +254,30 @@ jobs:
       - name: PostgreSQL 17 race tests
         if: matrix.postgres == '17'
         run: go test -race ./...
+
+  # The single required check: a failed upstream job (e.g. the fixture) skips its dependants,
+  # and GitHub counts skipped jobs as passing, so per-job required checks can pass with nothing run.
+  gate:
+    name: Security gate
+    needs: [changes, frontend, lint, race, fixture, browser, postgres]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every check that is in scope
+        shell: bash
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          CODE: ${{ needs.changes.outputs.code }}
+        run: |
+          # Docs-only PRs (code=false) may skip the test jobs; everything else must succeed.
+          bad="$(jq -r --arg code "$CODE" '
+            to_entries[]
+            | select(.value.result != "success")
+            | select(($code == "true") or (.key | IN("changes", "frontend", "lint")) or .value.result != "skipped")
+            | "\(.key): \(.value.result)"' <<< "$RESULTS")"
+          if [[ -n "$bad" ]]; then
+            echo "::error::required checks did not pass"
+            echo "$bad"
+            exit 1
+          fi
+          echo "all checks in scope passed (code=${CODE})"
