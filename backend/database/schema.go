@@ -1,9 +1,11 @@
 package database
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"math"
 	"oneimg/backend/models"
 	"time"
@@ -199,6 +201,20 @@ func BinaryOrder(db *gorm.DB, column string) string {
 		return column + ` COLLATE "C"`
 	}
 	return column + " COLLATE BINARY"
+}
+
+// JSONSetKey replaces one top-level key of a JSON column in place, leaving the
+// other keys as the database currently holds them. key must be a trusted
+// identifier; value is JSON-encoded and bound.
+func JSONSetKey(db *gorm.DB, column, key string, value any) (clause.Expr, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return clause.Expr{}, err
+	}
+	if db.Dialector.Name() == "postgres" {
+		return gorm.Expr("jsonb_set("+column+", '{"+key+"}', ?::jsonb)", string(encoded)), nil
+	}
+	return gorm.Expr("json_set("+column+", '$."+key+"', json(?))", string(encoded)), nil
 }
 
 // PasskeyNameSQL retains SQLite's ASCII-only name comparison on both backends.

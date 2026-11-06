@@ -665,6 +665,10 @@ export const listUsers = <ThrowOnError extends boolean = false>(options?: Option
 
 /**
  * 创建用户
+ *
+ * 创建管理员（role=1）还需要“修改角色”权限，否则返回 403 permission_denied；新管理员没有任何权限码。
+ * 操作者在请求期间失去所需权限时返回 403 permission_denied；数据被并发修改时返回 409 concurrent_update_conflict，请求未生效，刷新后可重试。
+ *
  */
 export const createUser = <ThrowOnError extends boolean = false>(options: Options<CreateUserData, ThrowOnError>): RequestResult<CreateUserResponses, CreateUserErrors, ThrowOnError> => (options.client ?? client).post<CreateUserResponses, CreateUserErrors, ThrowOnError>({
     security: [{
@@ -697,6 +701,8 @@ export const getUserAvatar = <ThrowOnError extends boolean = false>(options: Opt
 
 /**
  * 删除用户
+ *
+ * 管理范围与 updateUser 相同，不可管理的管理员返回 403 user_not_manageable；并发修改返回可重试的 409 concurrent_update_conflict。
  */
 export const deleteUser = <ThrowOnError extends boolean = false>(options: Options<DeleteUserData, ThrowOnError>): RequestResult<DeleteUserResponses, DeleteUserErrors, ThrowOnError> => (options.client ?? client).delete<DeleteUserResponses, DeleteUserErrors, ThrowOnError>({
     security: [{
@@ -710,6 +716,10 @@ export const deleteUser = <ThrowOnError extends boolean = false>(options: Option
 
 /**
  * 更新用户
+ *
+ * 只能管理普通用户，以及权限码严格少于操作者的管理员；超级管理员和当前用户返回 403 protected_user，其他不可管理的管理员返回 403 user_not_manageable。
+ * 普通用户提升为管理员时清空遗留权限码；角色保持不变时权限码不变。数据被并发修改时返回 409 concurrent_update_conflict，请求未生效，刷新后可重试。
+ *
  */
 export const updateUser = <ThrowOnError extends boolean = false>(options: Options<UpdateUserData, ThrowOnError>): RequestResult<UpdateUserResponses, UpdateUserErrors, ThrowOnError> => (options.client ?? client).patch<UpdateUserResponses, UpdateUserErrors, ThrowOnError>({
     security: [{
@@ -727,6 +737,10 @@ export const updateUser = <ThrowOnError extends boolean = false>(options: Option
 
 /**
  * 更新用户权限
+ *
+ * 管理范围与 updateUser 相同，不可管理的管理员返回 403 user_not_manageable。只能授予操作者自己拥有的权限码，否则返回 403 permission_not_held。
+ * 普通用户只保存存储桶，提交的权限码被忽略。并发修改返回可重试的 409 concurrent_update_conflict。
+ *
  */
 export const updateUserPermissions = <ThrowOnError extends boolean = false>(options: Options<UpdateUserPermissionsData, ThrowOnError>): RequestResult<UpdateUserPermissionsResponses, UpdateUserPermissionsErrors, ThrowOnError> => (options.client ?? client).put<UpdateUserPermissionsResponses, UpdateUserPermissionsErrors, ThrowOnError>({
     security: [{
@@ -744,6 +758,10 @@ export const updateUserPermissions = <ThrowOnError extends boolean = false>(opti
 
 /**
  * 重置用户密码
+ *
+ * 生成一次性临时密码，用户下次登录必须修改密码；目标用户的会话、个人访问令牌和 Passkey 全部撤销。撤销 Passkey 只需要“重置密码”权限。
+ * 管理范围与 updateUser 相同，不可管理的管理员返回 403 user_not_manageable；并发修改返回可重试的 409 concurrent_update_conflict。
+ *
  */
 export const resetUserPassword = <ThrowOnError extends boolean = false>(options: Options<ResetUserPasswordData, ThrowOnError>): RequestResult<ResetUserPasswordResponses, ResetUserPasswordErrors, ThrowOnError> => (options.client ?? client).post<ResetUserPasswordResponses, ResetUserPasswordErrors, ThrowOnError>({
     security: [{
@@ -757,6 +775,8 @@ export const resetUserPassword = <ThrowOnError extends boolean = false>(options:
 
 /**
  * 撤销用户的 Passkey
+ *
+ * 管理范围与 updateUser 相同，不可管理的管理员返回 403 user_not_manageable；并发修改返回可重试的 409 concurrent_update_conflict。
  */
 export const revokeUserPasskeys = <ThrowOnError extends boolean = false>(options: Options<RevokeUserPasskeysData, ThrowOnError>): RequestResult<RevokeUserPasskeysResponses, RevokeUserPasskeysErrors, ThrowOnError> => (options.client ?? client).post<RevokeUserPasskeysResponses, RevokeUserPasskeysErrors, ThrowOnError>({
     security: [{

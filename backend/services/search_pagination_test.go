@@ -131,7 +131,7 @@ func TestUnicodeSearchAndStablePagination(t *testing.T) {
 	}
 	other := createServiceTestUser(t, db, "other-user", "password", models.RoleUser)
 	name = "Admin-É-Σ"
-	if _, err := NewUserService(db).Update(user.ID, other.ID, &name, nil); err != nil {
+	if _, err := NewUserService(db).Update(user, other.ID, &name, nil); err != nil {
 		t.Fatal(err)
 	}
 	users, _, err = NewUserService(db).List(UserListQuery{Page: 1, PageSize: 10, Sort: "id", Order: "asc", Username: "ADMIN-E\u0301-ς"})

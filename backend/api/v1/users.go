@@ -80,7 +80,8 @@ func (s *Server) createUser(c *gin.Context) {
 	if !bindJSON(c, &input) {
 		return
 	}
-	user, err := s.services.Users.Create(input.Username, input.Password, input.Role)
+	actor, _ := currentUser(c)
+	user, err := s.services.Users.Create(*actor, input.Username, input.Password, input.Role)
 	if handleUserError(c, err) {
 		return
 	}
@@ -101,7 +102,7 @@ func (s *Server) updateUser(c *gin.Context) {
 		return
 	}
 	actor, _ := currentUser(c)
-	user, err := s.services.Users.Update(actor.ID, id, input.Username, input.Role)
+	user, err := s.services.Users.Update(*actor, id, input.Username, input.Role)
 	if handleUserError(c, err) {
 		return
 	}
@@ -114,7 +115,7 @@ func (s *Server) deleteUser(c *gin.Context) {
 		return
 	}
 	actor, _ := currentUser(c)
-	if err := s.services.Users.Delete(actor.ID, id); handleUserError(c, err) {
+	if err := s.services.Users.Delete(*actor, id); handleUserError(c, err) {
 		return
 	}
 	writeNoContent(c)
@@ -133,7 +134,7 @@ func (s *Server) updateUserPermissions(c *gin.Context) {
 		return
 	}
 	actor, _ := currentUser(c)
-	user, err := s.services.Users.SetPermissions(actor.ID, id, models.Permission{Codes: input.Codes, Buckets: input.BucketIDs})
+	user, err := s.services.Users.SetPermissions(*actor, id, models.Permission{Codes: input.Codes, Buckets: input.BucketIDs})
 	if handleUserError(c, err) {
 		return
 	}
@@ -146,7 +147,7 @@ func (s *Server) resetUserPassword(c *gin.Context) {
 		return
 	}
 	actor, _ := currentUser(c)
-	password, err := s.services.Users.ResetPassword(actor.ID, id)
+	password, err := s.services.Users.ResetPassword(*actor, id)
 	if handleUserError(c, err) {
 		return
 	}
@@ -159,7 +160,7 @@ func (s *Server) revokeUserPasskeys(c *gin.Context) {
 		return
 	}
 	actor, _ := currentUser(c)
-	if err := s.services.Users.RevokePasskeys(actor.ID, id); handleUserError(c, err) {
+	if err := s.services.Users.RevokePasskeys(*actor, id); handleUserError(c, err) {
 		return
 	}
 	writeNoContent(c)
@@ -169,11 +170,24 @@ func handleUserError(c *gin.Context, err error) bool {
 	if err == nil {
 		return false
 	}
+	var notHeld *services.PermissionNotHeldError
 	switch {
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		writeProblem(c, http.StatusNotFound, "user_not_found", "用户不存在")
 	case errors.Is(err, services.ErrProtectedUser):
 		writeProblem(c, http.StatusForbidden, "protected_user", "不能修改超级管理员或当前登录用户")
+	case errors.Is(err, services.ErrUserNotManageable):
+		writeProblem(c, http.StatusForbidden, "user_not_manageable", "只能管理权限少于自己的管理员和普通用户")
+	case errors.As(err, &notHeld):
+		writeProblem(c, http.StatusForbidden, "permission_not_held", "不能授予自己没有的权限: "+models.PermissionName(notHeld.Code))
+	case errors.Is(err, services.ErrRoleUpdateRequired):
+		writeProblem(c, http.StatusForbidden, "permission_denied", "缺少权限: "+models.PermissionName("user:role:update"))
+	case errors.Is(err, services.ErrActorNotPermitted):
+		writeProblem(c, http.StatusForbidden, "permission_denied", "当前账号已无此权限")
+	case errors.Is(err, services.ErrConcurrentUpdate):
+		writeProblem(c, http.StatusConflict, "concurrent_update_conflict", "用户数据刚被其他操作修改，请刷新后重试")
+	case errors.Is(err, models.ErrPermissionCodeInvalid):
+		writeProblem(c, http.StatusUnprocessableEntity, "validation_error", err.Error())
 	case errors.Is(err, services.ErrUsernameInvalid):
 		writeProblem(c, http.StatusUnprocessableEntity, "validation_error", "用户名长度必须为 3-50 个字符")
 	case errors.Is(err, services.ErrPasswordInvalid):
@@ -184,8 +198,6 @@ func handleUserError(c *gin.Context, err error) bool {
 		writeProblem(c, http.StatusConflict, "username_conflict", "用户名已存在")
 	case errors.Is(err, services.ErrBucketNotFound):
 		writeProblem(c, http.StatusUnprocessableEntity, "validation_error", "包含不存在的存储桶")
-	case strings.Contains(err.Error(), "非法的权限码"):
-		writeProblem(c, http.StatusUnprocessableEntity, "validation_error", err.Error())
 	default:
 		writeProblem(c, http.StatusInternalServerError, "user_operation_failed", "用户操作失败")
 	}

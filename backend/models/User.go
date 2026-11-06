@@ -114,10 +114,12 @@ func PermissionName(code string) string {
 	return "未知权限"
 }
 
+var ErrPermissionCodeInvalid = errors.New("非法的权限码")
+
 func ValidatePermissionCodes(codes []string) error {
 	for _, code := range codes {
 		if _, ok := permissionNames[code]; !ok {
-			return fmt.Errorf("非法的权限码: %s", code)
+			return fmt.Errorf("%w: %s", ErrPermissionCodeInvalid, code)
 		}
 	}
 	return nil
@@ -140,13 +142,67 @@ func FilterPermissionCodes(codes []string) []string {
 	return result
 }
 
-func (p Permission) HasPermission(code string) bool {
-	for _, current := range p.Codes {
-		if current == code || current == "*" {
+// EffectiveCodes is the single source of a user's permission codes, in
+// canonical order. Legacy "*" grants every code and unknown stored codes grant
+// nothing; plain users hold no codes whatever their stored permission says.
+func EffectiveCodes(u User) []string {
+	if u.ID == SuperAdminID {
+		return AllPermissionCodes()
+	}
+	if u.Role != RoleAdmin {
+		return []string{}
+	}
+	for _, code := range u.Permission.Codes {
+		if code == "*" {
+			return AllPermissionCodes()
+		}
+	}
+	return FilterPermissionCodes(u.Permission.Codes)
+}
+
+func Can(u User, code string) bool {
+	if u.ID == SuperAdminID {
+		return true
+	}
+	for _, current := range EffectiveCodes(u) {
+		if current == code {
 			return true
 		}
 	}
 	return false
+}
+
+// Covers reports whether actor may manage target. An admin target must hold a
+// strict subset of the actor's codes: equal peers cannot manage each other, so
+// demoting or trimming a peer is never available as a first step towards
+// resetting it.
+func Covers(actor, target User) bool {
+	if target.ID == SuperAdminID {
+		return false
+	}
+	if actor.ID == SuperAdminID || target.Role == RoleUser {
+		return true
+	}
+	if target.Role != RoleAdmin {
+		return false
+	}
+	targetCodes := EffectiveCodes(target)
+	actorCodes := EffectiveCodes(actor)
+	return IsCodeSubset(targetCodes, actorCodes) && len(targetCodes) < len(actorCodes)
+}
+
+// IsCodeSubset expects both slices to be deduplicated, as EffectiveCodes returns.
+func IsCodeSubset(codes, held []string) bool {
+	set := make(map[string]struct{}, len(held))
+	for _, code := range held {
+		set[code] = struct{}{}
+	}
+	for _, code := range codes {
+		if _, ok := set[code]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func IntSliceContains(arr []int, target int) bool {

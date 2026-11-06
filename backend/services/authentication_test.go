@@ -56,7 +56,7 @@ func TestPasswordRotationAndTokenCreationRace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewUserService(db).ResetPassword(user.ID, other.ID); err != nil {
+	if _, err := NewUserService(db).ResetPassword(user, other.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := tokens.Authenticate(otherToken.Plain); err == nil {

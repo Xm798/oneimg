@@ -153,7 +153,7 @@ func requirePermission(code string) gin.HandlerFunc {
 			return
 		}
 		user := principal.User
-		if user.ID != models.SuperAdminID && (user.Role != models.RoleAdmin || !user.Permission.HasPermission(code)) {
+		if !models.Can(*user, code) {
 			writeProblem(c, http.StatusForbidden, "permission_denied", "缺少权限: "+models.PermissionName(code))
 			c.Abort()
 			return
@@ -170,16 +170,10 @@ func requireAnyPermission(codes ...string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		if principal.User.ID == models.SuperAdminID {
-			c.Next()
-			return
-		}
-		if principal.User.Role == models.RoleAdmin {
-			for _, code := range codes {
-				if principal.User.Permission.HasPermission(code) {
-					c.Next()
-					return
-				}
+		for _, code := range codes {
+			if models.Can(*principal.User, code) {
+				c.Next()
+				return
 			}
 		}
 		writeProblem(c, http.StatusForbidden, "permission_denied", "没有执行此操作的权限")

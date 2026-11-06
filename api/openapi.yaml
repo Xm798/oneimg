@@ -521,6 +521,9 @@ paths:
     post:
       operationId: createUser
       summary: 创建用户
+      description: |
+        创建管理员（role=1）还需要“修改角色”权限，否则返回 403 permission_denied；新管理员没有任何权限码。
+        操作者在请求期间失去所需权限时返回 403 permission_denied；数据被并发修改时返回 409 concurrent_update_conflict，请求未生效，刷新后可重试。
       tags: [Users]
       requestBody:
         required: true
@@ -545,6 +548,9 @@ paths:
     patch:
       operationId: updateUser
       summary: 更新用户
+      description: |
+        只能管理普通用户，以及权限码严格少于操作者的管理员；超级管理员和当前用户返回 403 protected_user，其他不可管理的管理员返回 403 user_not_manageable。
+        普通用户提升为管理员时清空遗留权限码；角色保持不变时权限码不变。数据被并发修改时返回 409 concurrent_update_conflict，请求未生效，刷新后可重试。
       tags: [Users]
       requestBody:
         required: true
@@ -555,6 +561,7 @@ paths:
     delete:
       operationId: deleteUser
       summary: 删除用户
+      description: 管理范围与 updateUser 相同，不可管理的管理员返回 403 user_not_manageable；并发修改返回可重试的 409 concurrent_update_conflict。
       tags: [Users]
       responses:
         '204': { $ref: '#/components/responses/NoContentResponse' }
@@ -564,6 +571,9 @@ paths:
     put:
       operationId: updateUserPermissions
       summary: 更新用户权限
+      description: |
+        管理范围与 updateUser 相同，不可管理的管理员返回 403 user_not_manageable。只能授予操作者自己拥有的权限码，否则返回 403 permission_not_held。
+        普通用户只保存存储桶，提交的权限码被忽略。并发修改返回可重试的 409 concurrent_update_conflict。
       tags: [Users]
       requestBody:
         required: true
@@ -576,6 +586,9 @@ paths:
     post:
       operationId: resetUserPassword
       summary: 重置用户密码
+      description: |
+        生成一次性临时密码，用户下次登录必须修改密码；目标用户的会话、个人访问令牌和 Passkey 全部撤销。撤销 Passkey 只需要“重置密码”权限。
+        管理范围与 updateUser 相同，不可管理的管理员返回 403 user_not_manageable；并发修改返回可重试的 409 concurrent_update_conflict。
       tags: [Users]
       responses:
         '200': { $ref: '#/components/responses/DataResponse' }
@@ -585,6 +598,7 @@ paths:
     post:
       operationId: revokeUserPasskeys
       summary: 撤销用户的 Passkey
+      description: 管理范围与 updateUser 相同，不可管理的管理员返回 403 user_not_manageable；并发修改返回可重试的 409 concurrent_update_conflict。
       tags: [Users]
       responses:
         '204': { $ref: '#/components/responses/NoContentResponse' }

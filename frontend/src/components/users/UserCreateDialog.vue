@@ -5,6 +5,8 @@ import { passwordError, usernameError } from '@/components/auth/auth'
 import { toast, UiButton, UiDialog, UiField, UiInput, UiPasswordInput, UiSegmented } from '@/components/ui'
 import { ROLE_ADMIN, ROLE_USER } from '@/utils/permissions.ts'
 
+/** Creating an admin requires user:role:update. */
+defineProps<{ canCreateAdmin: boolean }>()
 const open = defineModel<boolean>('open', { default: false })
 const emit = defineEmits<{ created: [user: User] }>()
 
@@ -60,7 +62,7 @@ const submit = async () => {
       <UiField label="初始密码" for="user-create-password" hint="至少 6 位。新用户首次登录后可以在账户设置里修改" :error="errors.password">
         <UiPasswordInput id="user-create-password" v-model="form.password" maxlength="100" autocomplete="new-password" :invalid="!!errors.password" />
       </UiField>
-      <UiField label="角色">
+      <UiField v-if="canCreateAdmin" label="角色">
         <UiSegmented v-model="form.role" :options="roleOptions" aria-label="角色" class="self-start" />
         <template #hint>{{ form.role === String(ROLE_ADMIN) ? '管理员可以使用全部存储，后台功能按勾选的权限开放（新建时没有任何功能权限）。' : '普通用户只能管理自己的文件，可以使用默认存储和授权的存储。' }}</template>
       </UiField>

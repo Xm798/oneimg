@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api, errorMessage, type ManagedUser } from '@/api/client.ts'
+import { api, ApiError, errorMessage, type ManagedUser } from '@/api/client.ts'
 import LinkBox from '@/components/media/LinkBox.vue'
 import { confirm, toast, UiAvatar, UiButton, UiDialog, UiMenu, UiMenuItem, UiMenuSeparator, UiSegmented } from '@/components/ui'
 import UserCreateDialog from '@/components/users/UserCreateDialog.vue'
@@ -9,7 +9,7 @@ import UserDrawer from '@/components/users/UserDrawer.vue'
 import { ALL_CODES } from '@/components/users/permissions'
 import type { UserStorage } from '@/components/users/types'
 import { useSession } from '@/composables/useSession'
-import { hasPermission, ROLE_ADMIN, SUPER_ADMIN_ID } from '@/utils/permissions.ts'
+import { canManage, hasPermission, ROLE_ADMIN, SUPER_ADMIN_ID } from '@/utils/permissions.ts'
 
 const PAGE_SIZE = 20
 const route = useRoute()
@@ -109,7 +109,12 @@ onMounted(() => {
 })
 
 /* ---------- 显示 ---------- */
-const protectedUser = (user: ManagedUser) => user.id === SUPER_ADMIN_ID || user.id === me.value.id
+const manageable = (user: ManagedUser) => canManage(user, me.value)
+// A 403 or 409 means the listed roles or codes are stale; reload so the actions match the server.
+const reloadOnStale = (error: unknown) => {
+  const status = error instanceof ApiError ? error.problem?.status : 0
+  if (status === 403 || status === 409) void load()
+}
 const codeCount = (user: ManagedUser) => {
   if (user.role !== ROLE_ADMIN) return '—'
   const codes = user.permission?.codes ?? []
@@ -148,7 +153,7 @@ const resetPassword = async (user: ManagedUser) => {
   const ok = await confirm({
     title: `重置 ${user.username} 的密码？`,
     description: '将生成 16 位临时密码：',
-    points: ['旧密码立即失效，该用户已登录的会话会退出', '该用户的全部 API 令牌会被撤销，Passkey 不受影响'],
+    points: ['旧密码立即失效，该用户已登录的会话会退出', '该用户的全部 API 令牌和 Passkey 会被撤销', '该用户首次登录必须修改密码'],
     icon: 'ri-key-2-line',
     confirmText: '重置密码',
   })
@@ -159,6 +164,7 @@ const resetPassword = async (user: ManagedUser) => {
     tempOpen.value = true
   } catch (error) {
     toast.error(errorMessage(error, '重置密码失败'))
+    reloadOnStale(error)
   }
 }
 watch(tempOpen, value => { if (!value) tempPassword.value = null })
@@ -178,6 +184,7 @@ const revokePasskeys = async (user: ManagedUser) => {
     void load()
   } catch (error) {
     toast.error(errorMessage(error, '撤销失败'))
+    reloadOnStale(error)
   }
 }
 
@@ -196,6 +203,7 @@ const removeUser = async (user: ManagedUser) => {
     void load()
   } catch (error) {
     toast.error(errorMessage(error, '删除失败'))
+    reloadOnStale(error)
   }
 }
 </script>
@@ -270,7 +278,7 @@ const removeUser = async (user: ManagedUser) => {
             <td class="tabular-nums text-oi-muted max-[900px]:hidden">{{ user.passkey_count || '—' }}</td>
             <td class="whitespace-nowrap tabular-nums text-oi-muted max-[900px]:hidden">{{ formatDate(user.created_at) }}</td>
             <td class="whitespace-nowrap text-right">
-              <template v-if="!protectedUser(user)">
+              <template v-if="manageable(user)">
                 <UiButton v-if="canEditRole || canEditPermissions" size="sm" @click="openDrawer(user)">权限</UiButton>
                 <UiMenu v-if="hasMoreActions" align="end">
                   <template #trigger>
@@ -287,7 +295,8 @@ const removeUser = async (user: ManagedUser) => {
                 </UiMenu>
               </template>
               <RouterLink v-else-if="user.id === me.id" to="/account" class="text-xs text-oi-muted hover:text-oi-ink hover:underline">在账户设置中修改</RouterLink>
-              <span v-else class="text-xs text-oi-muted">受保护</span>
+              <span v-else-if="user.id === SUPER_ADMIN_ID" class="text-xs text-oi-muted">受保护</span>
+              <span v-else class="text-xs text-oi-muted" title="只能管理权限少于自己的管理员和普通用户">无权管理</span>
             </td>
           </tr>
           <tr v-if="loading && !users.length">
@@ -306,7 +315,7 @@ const removeUser = async (user: ManagedUser) => {
       <UiButton size="sm" variant="ghost" :disabled="page >= totalPages || loading" @click="page++">下一页<i class="ri-arrow-right-s-line" aria-hidden="true" /></UiButton>
     </nav>
 
-    <UserCreateDialog v-model:open="createOpen" @created="load" />
+    <UserCreateDialog v-model:open="createOpen" :can-create-admin="canEditRole" @created="load" />
     <UserDrawer
       v-model:open="drawerOpen"
       :user="editing"
@@ -315,6 +324,7 @@ const removeUser = async (user: ManagedUser) => {
       :storages-partial="storagesPartial"
       :can-edit-role="canEditRole"
       :can-edit-permissions="canEditPermissions"
+      :actor="me"
       @saved="load"
     />
     <UiDialog v-model:open="tempOpen" :title="`${tempPassword?.username ?? ''} 的临时密码`" description="只显示这一次，请通过安全渠道发给对方，并提醒对方登录后在账户设置里修改密码。" icon="ri-key-2-line">

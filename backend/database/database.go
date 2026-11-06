@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/mattn/go-sqlite3"
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -194,6 +195,20 @@ func ErrorCode(err error) string {
 		return "duplicate_key"
 	}
 	return "database_error"
+}
+
+// IsWriteConflict reports errors meaning another transaction got there first:
+// the failed transaction rolled back and retrying it is safe.
+func IsWriteConflict(err error) bool {
+	var lite sqlite3.Error
+	if errors.As(err, &lite) {
+		return lite.Code == sqlite3.ErrBusy || lite.Code == sqlite3.ErrLocked
+	}
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) {
+		return pg.Code == "40001" || pg.Code == "40P01"
+	}
+	return false
 }
 func InitDB(cfg *config.Config) error {
 	value, err := Open(cfg)

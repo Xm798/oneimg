@@ -160,7 +160,7 @@ func canAccessSettingGroup(user models.User, group string) bool {
 	if user.ID == models.SuperAdminID {
 		return true
 	}
-	return user.Role == models.RoleAdmin && user.Permission.HasPermission(settingGroupPermission[group])
+	return models.Can(user, settingGroupPermission[group])
 }
 
 func (r settingsPatchRequest) groups() []string {

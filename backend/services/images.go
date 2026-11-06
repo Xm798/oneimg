@@ -244,7 +244,7 @@ func CanAccessImage(user models.User, image models.Image, permission string) boo
 	if user.ID == models.SuperAdminID || image.UserId == user.ID {
 		return true
 	}
-	return user.Role == models.RoleAdmin && (permission == "" || user.Permission.HasPermission(permission))
+	return user.Role == models.RoleAdmin && (permission == "" || models.Can(user, permission))
 }
 
 func (s *ImageService) Delete(ctx context.Context, id int) error {

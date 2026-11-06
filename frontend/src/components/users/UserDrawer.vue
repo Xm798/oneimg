@@ -4,7 +4,7 @@ import { api, ApiError, errorMessage, type ManagedUser } from '@/api/client.ts'
 import { usernameError } from '@/components/auth/auth'
 import StorageTypeIcon from '@/components/storage/StorageTypeIcon.vue'
 import { toast, UiAvatar, UiButton, UiDrawer, UiField, UiInput, UiSegmented, UiSwitch } from '@/components/ui'
-import { ROLE_ADMIN, ROLE_USER } from '@/utils/permissions.ts'
+import { effectiveCodes, isSuperAdmin, ROLE_ADMIN, ROLE_USER } from '@/utils/permissions.ts'
 import { ALL_CODES, PERMISSION_GROUPS } from './permissions'
 import type { UserStorage } from './types'
 
@@ -16,6 +16,8 @@ const props = defineProps<{
   storagesPartial: boolean
   canEditRole: boolean
   canEditPermissions: boolean
+  /** The signed-in admin; only codes it holds can be granted. */
+  actor: Record<string, unknown>
 }>()
 const open = defineModel<boolean>('open', { default: false })
 const emit = defineEmits<{ saved: [] }>()
@@ -27,11 +29,11 @@ const saving = ref(false)
 watch([open, () => props.user], () => {
   const user = props.user
   if (!open.value || !user) return
-  const codes = user.permission?.codes ?? []
   Object.assign(draft, {
     username: user.username,
     role: String(user.role),
-    codes: codes.includes('*') ? [...ALL_CODES] : codes.filter(code => ALL_CODES.includes(code)),
+    // Stale codes on a plain user grant nothing, and the server clears them on promotion.
+    codes: effectiveCodes(user),
     buckets: [...(user.permission?.bucket_ids ?? [])],
   })
   usernameMessage.value = ''
@@ -43,12 +45,19 @@ const roleOptions = [
   { value: String(ROLE_ADMIN), label: '管理员' },
 ]
 
+const heldCodes = computed(() => effectiveCodes(props.actor))
+const holds = (code: string) => heldCodes.value.includes(code)
+// An equal set makes the target a peer that only a higher admin can manage.
+const becomesPeer = computed(() => isAdminDraft.value && !isSuperAdmin(props.actor) && draft.codes.length >= heldCodes.value.length)
+
 const toggleCode = (code: string, on: boolean) => {
+  if (!holds(code)) return
   draft.codes = on ? [...new Set([...draft.codes, code])] : draft.codes.filter(item => item !== code)
 }
-const groupAll = (codes: readonly { code: string }[]) => codes.every(item => draft.codes.includes(item.code))
+const heldItems = (codes: readonly { code: string }[]) => codes.map(item => item.code).filter(holds)
+const groupAll = (codes: readonly { code: string }[]) => heldItems(codes).every(code => draft.codes.includes(code))
 const toggleGroup = (codes: readonly { code: string }[]) => {
-  const list = codes.map(item => item.code)
+  const list = heldItems(codes)
   draft.codes = groupAll(codes) ? draft.codes.filter(code => !list.includes(code)) : [...new Set([...draft.codes, ...list])]
 }
 
@@ -78,7 +87,7 @@ const save = async () => {
   }
   if (props.canEditRole && Number(draft.role) !== user.role) profile.role = Number(draft.role)
   const codes = isAdminDraft.value ? draft.codes : []
-  const originalCodes = user.permission?.codes ?? []
+  const originalCodes = effectiveCodes(user)
   const permissionsChanged = props.canEditPermissions && (!sameList(codes, originalCodes) || !sameList(draft.buckets, user.permission?.bucket_ids ?? []))
   if (!Object.keys(profile).length && !permissionsChanged) {
     open.value = false
@@ -104,7 +113,11 @@ const save = async () => {
     else if (profileSaved) {
       toast.error(`用户名和角色已保存，但权限没有保存：${message}`)
       emit('saved')
-    } else toast.error(message)
+    } else {
+      toast.error(message)
+      const status = error instanceof ApiError ? error.problem?.status : 0
+      if (status === 403 || status === 409) emit('saved')
+    }
   } finally {
     saving.value = false
   }
@@ -138,7 +151,7 @@ const save = async () => {
         <div v-for="group in PERMISSION_GROUPS" :key="group.name" class="overflow-hidden rounded-[14px] border border-oi-line">
           <div class="flex items-center gap-2.5 border-b border-oi-line bg-oi-panel px-3.5 py-2 text-[13px] font-semibold text-oi-ink">
             <i :class="[group.icon, 'text-base text-oi-muted']" aria-hidden="true" />{{ group.name }}
-            <UiButton v-if="canEditPermissions" size="sm" variant="ghost" class="ml-auto !h-6" @click="toggleGroup(group.items)">
+            <UiButton v-if="canEditPermissions && heldItems(group.items).length" size="sm" variant="ghost" class="ml-auto !h-6" @click="toggleGroup(group.items)">
               {{ groupAll(group.items) ? '全不选' : '全选' }}<span class="sr-only">{{ group.name }}</span>
             </UiButton>
           </div>
@@ -148,9 +161,12 @@ const save = async () => {
             class="flex cursor-pointer items-center justify-between gap-3 border-b border-oi-line px-3.5 py-2.5 text-[13px] last:border-b-0"
           >
             <span class="min-w-0">{{ item.label }}<code class="ml-1.5 font-oi-mono text-[11px] text-oi-faint">{{ item.code }}</code></span>
-            <UiSwitch :model-value="draft.codes.includes(item.code)" :disabled="!canEditPermissions" :aria-label="item.label" @update:model-value="toggleCode(item.code, $event)" />
+            <UiSwitch :model-value="draft.codes.includes(item.code)" :disabled="!canEditPermissions || !holds(item.code)" :aria-label="item.label" :title="holds(item.code) ? undefined : '你没有这项权限，不能授予'" @update:model-value="toggleCode(item.code, $event)" />
           </label>
         </div>
+        <p v-if="canEditPermissions && becomesPeer" class="flex items-center gap-1.5 text-[12.5px] text-oi-warn" role="status">
+          <i class="ri-error-warning-line" aria-hidden="true" />保存后你将无法再管理该用户
+        </p>
       </fieldset>
 
       <div v-else class="flex flex-col gap-2">

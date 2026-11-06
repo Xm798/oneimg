@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"oneimg/backend/database"
 	"oneimg/backend/models"
 	utilsBuckets "oneimg/backend/utils/buckets"
 	"oneimg/backend/utils/ftp"
@@ -395,7 +396,7 @@ func (s *StorageService) deleteBucketRecords(id int, bucket models.Buckets) erro
 			return err
 		}
 		var users []models.User
-		if err := tx.Find(&users).Error; err != nil {
+		if err := lockUsersForUpdate(tx).Find(&users).Error; err != nil {
 			return err
 		}
 		for _, user := range users {
@@ -406,8 +407,13 @@ func (s *StorageService) deleteBucketRecords(id int, bucket models.Buckets) erro
 				}
 			}
 			if len(filtered) != len(user.Permission.Buckets) {
-				user.Permission.Buckets = filtered
-				if err := tx.Model(&user).Update("permission", user.Permission).Error; err != nil {
+				// Only the buckets key is rewritten, so a code revocation that
+				// commits meanwhile is never overwritten by this row's old codes.
+				expr, err := database.JSONSetKey(tx, "permission", "buckets", filtered)
+				if err != nil {
+					return err
+				}
+				if err := tx.Model(&models.User{}).Where("id = ?", user.ID).Update("permission", expr).Error; err != nil {
 					return err
 				}
 			}
@@ -421,7 +427,7 @@ func (s *StorageService) deleteBucketRecords(id int, bucket models.Buckets) erro
 
 func (s *StorageService) TestConnection(ctx context.Context, actor models.User, input StorageInput, existingID *int) (string, error) {
 	can := func(code string) bool {
-		return actor.ID == models.SuperAdminID || (actor.Role == models.RoleAdmin && actor.Permission.HasPermission(code))
+		return models.Can(actor, code)
 	}
 	if (existingID != nil && !can("storage:update")) || (existingID == nil && !can("storage:create") && !can("storage:update")) {
 		return "", ErrPermissionDenied

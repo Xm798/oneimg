@@ -102,7 +102,7 @@ func (s *Server) getUserAvatar(c *gin.Context) {
 			writeProblem(c, http.StatusForbidden, "insufficient_scope", "Token 缺少所需 scope: users:read")
 			return
 		}
-		if actor.ID != models.SuperAdminID && (actor.Role != models.RoleAdmin || !actor.Permission.HasPermission("user:list")) {
+		if !models.Can(*actor, "user:list") {
 			writeProblem(c, http.StatusForbidden, "permission_denied", "缺少权限: "+models.PermissionName("user:list"))
 			return
 		}
