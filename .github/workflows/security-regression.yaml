@@ -7,8 +7,67 @@ on:
   workflow_call:
 permissions:
   contents: read
+# A newer push to the same PR supersedes the running check; every other run gets its own group.
+concurrency:
+  group: security-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
 jobs:
-  security:
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.scope.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Classify changed files
+        id: scope
+        shell: bash
+        run: |
+          # Pushes and calls from Build are release gates and always run everything.
+          if [[ "$GITHUB_EVENT_NAME" != pull_request ]]; then echo code=true >> "$GITHUB_OUTPUT"; exit 0; fi
+          # The PR merge commit's first parent is the base, so this lists exactly the PR's changes.
+          changed="$(git diff --name-only HEAD^1 HEAD)"
+          printf '%s\n' "$changed"
+          if grep -qvE '^docs/|\.md$' <<< "$changed"; then echo code=true; else echo code=false; fi >> "$GITHUB_OUTPUT"
+
+  frontend:
+    name: Frontend and API contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # pnpm must be on PATH before setup-node resolves the pnpm cache.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 10
+          package_json_file: frontend/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Locked dependencies, API contract and build
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run openapi:check
+          pnpm run build
+      # Every Go job embeds frontend/dist (go:embed), so it is built once and shared.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 1
+          if-no-files-found: error
+
+  lint:
+    name: gofmt, vet and govulncheck
+    needs: frontend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -25,36 +84,83 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          node-version: 22
+          name: frontend-dist
+          path: frontend/dist
+      - name: go vet
+        run: go vet ./...
+      - name: govulncheck
+        # Advisories appear without any commit, so PRs report without failing;
+        # pushes and tags (via workflow_call) must be clean.
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  race:
+    name: SQLite race tests
+    needs: [changes, frontend]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.10'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: frontend-dist
+          path: frontend/dist
+      # The race run executes the full suite, so a separate non-race pass would repeat it.
+      - name: Backend race tests
+        run: go test -race ./...
+
+  browser:
+    name: Browser ${{ matrix.browser }}
+    needs: [changes, frontend]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.10'
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 10
           package_json_file: frontend/package.json
-      - name: Frontend and API contract
-        working-directory: frontend
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm run openapi:check
-          pnpm run build
-      - name: govulncheck
-        # Needs frontend/dist (go:embed). Advisories appear without any commit, so PRs
-        # report without failing; pushes and tags (via workflow_call) must be clean.
-        continue-on-error: ${{ github.event_name == 'pull_request' }}
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
-      - name: Backend and race tests
-        run: |
-          go test ./...
-          go test -race ./...
-          go vet ./...
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: frontend-dist
+          path: frontend/dist
+      # The lockfile pins the Playwright version, and with it the browser builds.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ matrix.browser }}-${{ hashFiles('frontend/pnpm-lock.yaml') }}
       - name: Browser security tests
         working-directory: frontend
         run: |
-          pnpm exec playwright install --with-deps chromium firefox webkit
-          pnpm run test:security
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps ${{ matrix.browser }}
+          pnpm run test:security --project=${{ matrix.browser }}
+
   postgres:
     name: PostgreSQL ${{ matrix.postgres }}
+    needs: [changes, frontend]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -82,27 +188,37 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.10'
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          node-version: 22
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        with:
-          version: 10
-          package_json_file: frontend/package.json
-      - name: Locked dependencies, API contract and frontend
-        working-directory: frontend
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm run openapi:check
-          pnpm run build
+          name: frontend-dist
+          path: frontend/dist
       - name: Database, setup, services, API, local import and offline migration
+        if: matrix.postgres != '17'
         run: go test ./...
+      # On 17 the race run covers the full suite.
       - name: PostgreSQL 17 race tests
         if: matrix.postgres == '17'
         run: go test -race ./...
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        if: matrix.postgres == '17'
+        with:
+          version: 10
+          package_json_file: frontend/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: matrix.postgres == '17'
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: matrix.postgres == '17'
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-all-${{ hashFiles('frontend/pnpm-lock.yaml') }}
       - name: PostgreSQL 17 browser security tests
         if: matrix.postgres == '17'
         working-directory: frontend
         run: |
+          pnpm install --frozen-lockfile
           pnpm exec playwright install --with-deps chromium firefox webkit
           pnpm run test:security

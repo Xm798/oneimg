@@ -79,45 +79,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "ref=${GITHUB_REF_NAME} publish=${publish} latest=${latest} minor=${minor} major=${major}"
 
-  test:
-    name: Unit tests
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 22
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        with:
-          version: 10
-          package_json_file: frontend/package.json
-
-      - name: Check OpenAPI and build frontend
-        working-directory: frontend
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm run openapi:check
-          pnpm run build
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.26.10'
-
-      # PostgreSQL coverage comes from the Security workflow's postgres matrix.
-      - name: Backend tests
-        run: go test ./...
-
   security:
     name: Security
     # A called workflow cannot exceed the permissions granted to the calling job.
@@ -125,26 +86,29 @@ jobs:
       contents: read
     uses: ./.github/workflows/security-regression.yaml
 
-  publish:
-    name: Build and push multi-arch image
-    needs: [preflight, test, security]
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: [preflight, security]
     if: needs.preflight.outputs.publish == 'true'
-    runs-on: ubuntu-latest
-    # Normally 17–28 minutes; fail early on a QEMU hang instead of running to the 6-hour limit.
-    timeout-minutes: 60
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          # Native arm64 runner: compiling CGO and libwebp under QEMU dominated the single-runner build.
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
-      id-token: write
-      attestations: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -156,8 +120,79 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # attest-build-provenance does not lowercase subject-name, so one lowercased value feeds both actions.
       # The repository part is fixed so a renamed fork still publishes to <owner>/oneimg.
+      - name: Image name
+        id: image
+        shell: bash
+        run: |
+          echo "name=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/oneimg" >> "$GITHUB_OUTPUT"
+          echo "pair=${PLATFORM//\//-}" >> "$GITHUB_OUTPUT"
+        env:
+          PLATFORM: ${{ matrix.platform }}
+
+      # Only the labels are used here; the merge job owns the tags.
+      - name: Image labels
+        id: metadata
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.image.outputs.name }}
+
+      - name: Build and push by digest
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ steps.image.outputs.pair }}
+          cache-to: type=gha,scope=${{ steps.image.outputs.pair }},mode=max
+          provenance: true
+          sbom: true
+
+      - name: Export digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digests-${{ steps.image.outputs.pair }}
+          path: ${{ runner.temp }}/digests/*
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: Publish multi-arch image
+    needs: [preflight, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digests-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # attest-build-provenance does not lowercase subject-name, so one lowercased value feeds both steps.
       - name: Image name
         id: image
         shell: bash
@@ -179,25 +214,28 @@ jobs:
             type=semver,pattern=v{{major}},enable=${{ needs.preflight.outputs.publish_major == 'true' }}
             type=raw,value=latest,enable=${{ needs.preflight.outputs.publish_latest == 'true' }}
 
-      - name: Build and push image
-        id: push
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: true
-          sbom: true
+      - name: Create manifest list and push
+        id: manifest
+        shell: bash
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          FIRST_TAG: ${{ fromJSON(steps.metadata.outputs.json).tags[0] }}
+        run: |
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          args=()
+          for tag in "${tags[@]}"; do args+=(-t "$tag"); done
+          sources=()
+          for digest in *; do sources+=("${IMAGE}@sha256:${digest}"); done
+          docker buildx imagetools create "${args[@]}" "${sources[@]}"
+          digest="$(docker buildx imagetools inspect "$FIRST_TAG" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ steps.image.outputs.name }}
-          subject-digest: ${{ steps.push.outputs.digest }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
           # Storage records need artifact-metadata: write and work only for organization-owned repositories.
           create-storage-record: false
