@@ -106,7 +106,19 @@ curl -sS -X POST "${ONEIMG_URL}/api/v1/image-imports" \
   -d '{"url":"https://images.example.com/photo.jpg"}'
 ```
 
-示例域名需要替换为实际图片来源。完成调用后可清除当前 Shell 中的令牌变量：
+示例域名需要替换为实际图片来源。服务端先检查 URL、目标存储和标签，再下载远端图片；下载不占用图像处理槽。导入专有的错误：
+
+| 状态与代码 | 含义与处理 |
+| --- | --- |
+| `403` `remote_address_forbidden` | URL 或其解析结果指向内网、保留或特殊用途地址，改用公网地址 |
+| `422` `invalid_import_url` / `remote_image_too_large` / `remote_content_not_image` | URL 无效、超过单文件大小限制或内容不是图片，重试不会成功 |
+| `429` `import_concurrency_exceeded` | 同一用户最多同时进行 2 个导入；等待当前导入完成或按 `Retry-After` 重试 |
+| `503` `import_busy` | 全站导入容量已满，按 `Retry-After` 重试 |
+| `503` `image_processing_busy` | 下载完成但图像处理繁忙，按 `Retry-After` 重试 |
+| `504` `remote_image_too_slow` | 远端停滞超过 10 秒、速度过低或 60 秒内无法完成 |
+| `502` `remote_image_download_failed` | 远端返回错误状态、连接失败或 DNS 解析失败 |
+
+完成调用后可清除当前 Shell 中的令牌变量：
 
 ```bash
 unset ONEIMG_TOKEN

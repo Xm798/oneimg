@@ -19,6 +19,7 @@ type Services struct {
 	Stats    *StatsService
 	Storage  *StorageService
 	Uploads  *UploadService
+	Imports  *RemoteImporter
 }
 
 func New(db *database.Database, cfg *config.Config) *Services {
@@ -38,5 +39,6 @@ func New(db *database.Database, cfg *config.Config) *Services {
 	result.Stats = NewStatsService(db.DB)
 	result.Storage = NewStorageService(db.DB)
 	result.Uploads = NewUploadService(db.DB)
+	result.Imports = NewRemoteImporter(ImportConfig{})
 	return result
 }

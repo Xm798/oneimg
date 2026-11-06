@@ -35,6 +35,60 @@ func NewUploadService(db *gorm.DB) *UploadService {
 	return &UploadService{db: db, storageUploader: uploads.GetStorageUploader, deleteUploaded: deleteStoredImage}
 }
 
+// ResolveTargetBucket runs the upload target checks without taking storage
+// locks, so callers can reject a request before doing expensive work.
+// UploadBatch repeats the same checks under its locks.
+func (s *UploadService) ResolveTargetBucket(user models.User, bucketID int, tagIDs []int) error {
+	var setting models.Settings
+	if err := s.db.First(&setting).Error; err != nil {
+		return err
+	}
+	if bucketID == 0 {
+		bucketID = setting.DefaultStorage
+	}
+	_, _, err := s.resolveTarget(user, bucketID, tagIDs)
+	return err
+}
+
+func (s *UploadService) resolveTarget(user models.User, bucketID int, tagIDs []int) (models.Buckets, []int, error) {
+	var bucket models.Buckets
+	var disabledCount int64
+	if err := s.db.Model(&models.Buckets{}).Where("id = ? AND disabled = ?", bucketID, true).Count(&disabledCount).Error; err != nil {
+		return bucket, nil, err
+	}
+	if disabledCount > 0 {
+		return bucket, nil, ErrStorageDisabled
+	}
+	_, allowedBuckets, err := NewStorageService(s.db).UploadOptions(user)
+	if err != nil {
+		return bucket, nil, err
+	}
+	allowed := false
+	for _, item := range allowedBuckets {
+		if item.Id == bucketID {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return bucket, nil, ErrBucketAccess
+	}
+	if err := s.db.First(&bucket, bucketID).Error; err != nil {
+		return bucket, nil, err
+	}
+	tagIDs = uniqueInts(tagIDs)
+	if len(tagIDs) > 0 {
+		var count int64
+		if err := s.db.Model(&models.Tags{}).Where("id IN ?", tagIDs).Count(&count).Error; err != nil {
+			return bucket, nil, err
+		}
+		if count != int64(len(tagIDs)) {
+			return bucket, nil, gorm.ErrRecordNotFound
+		}
+	}
+	return bucket, tagIDs, nil
+}
+
 func (s *UploadService) UploadBatch(c *gin.Context, user models.User, files []*multipart.FileHeader, bucketID int, tagIDs []int) ([]UploadFileResult, error) {
 	storageTopology.RLock()
 	defer storageTopology.RUnlock()
@@ -47,40 +101,9 @@ func (s *UploadService) UploadBatch(c *gin.Context, user models.User, files []*m
 	}
 	unlockBucket := lockBucket(bucketID, false)
 	defer unlockBucket()
-	var disabledCount int64
-	if err := s.db.Model(&models.Buckets{}).Where("id = ? AND disabled = ?", bucketID, true).Count(&disabledCount).Error; err != nil {
-		return nil, err
-	}
-	if disabledCount > 0 {
-		return nil, ErrStorageDisabled
-	}
-	_, allowedBuckets, err := NewStorageService(s.db).UploadOptions(user)
+	bucket, tagIDs, err := s.resolveTarget(user, bucketID, tagIDs)
 	if err != nil {
 		return nil, err
-	}
-	allowed := false
-	for _, bucket := range allowedBuckets {
-		if bucket.Id == bucketID {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		return nil, ErrBucketAccess
-	}
-	var bucket models.Buckets
-	if err := s.db.First(&bucket, bucketID).Error; err != nil {
-		return nil, err
-	}
-	tagIDs = uniqueInts(tagIDs)
-	if len(tagIDs) > 0 {
-		var count int64
-		if err := s.db.Model(&models.Tags{}).Where("id IN ?", tagIDs).Count(&count).Error; err != nil {
-			return nil, err
-		}
-		if count != int64(len(tagIDs)) {
-			return nil, gorm.ErrRecordNotFound
-		}
 	}
 	uploader, err := s.storageUploader(&bucket)
 	if err != nil {

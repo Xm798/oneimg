@@ -327,9 +327,14 @@ func TestRemoteImportRejectsNonPublicAddresses(t *testing.T) {
 		"http://[::1]/image.png",
 		"http://[fe80::1]/image.png",
 		"http://224.0.0.1/image.png",
+		"http://198.18.0.1/image.png",
+		"http://192.0.0.8/image.png",
+		"http://240.0.0.1/image.png",
+		"http://[64:ff9b::a9fe:a9fe]/image.png",
+		"http://[2002:7f00:1::1]/image.png",
 	} {
 		t.Run(rawURL, func(t *testing.T) {
-			if _, err := validateRemoteURL(rawURL); !errors.Is(err, ErrImportSSRF) {
+			if _, err := ValidateRemoteURL(rawURL, PublicAddr); !errors.Is(err, ErrImportSSRF) {
 				t.Fatalf("error = %v", err)
 			}
 		})

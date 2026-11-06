@@ -368,7 +368,7 @@ export const getImage = <ThrowOnError extends boolean = false>(options: Options<
 /**
  * 导入远程图片
  *
- * 无效格式或超出图像预算返回 422；目标存储已停用返回 409 storage_disabled；处理繁忙返回 503 和 Retry-After，客户端应稍后重试。
+ * 先检查 URL、目标存储和标签，再下载远端图片。无效格式或超出图像预算返回 422；目标存储已停用返回 409 storage_disabled；同一用户同时进行的导入过多返回 429 import_concurrency_exceeded；导入容量已满返回 503 import_busy，处理繁忙返回 503 image_processing_busy，两者都带 Retry-After，客户端应稍后重试；远端停滞、过慢或超时返回 504 remote_image_too_slow，其他远端失败返回 502 remote_image_download_failed。
  */
 export const importImage = <ThrowOnError extends boolean = false>(options: Options<ImportImageData, ThrowOnError>): RequestResult<ImportImageResponses, ImportImageErrors, ThrowOnError> => (options.client ?? client).post<ImportImageResponses, ImportImageErrors, ThrowOnError>({
     security: [{

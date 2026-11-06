@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"context"
 	"errors"
 	"mime/multipart"
 	"net/http"
@@ -468,48 +469,39 @@ func (s *Server) importImage(c *gin.Context) {
 		writeProblem(c, http.StatusInternalServerError, "upload_options_failed", "读取上传限制失败")
 		return
 	}
-	ctx, release, err := images.AcquireProcessing(c.Request.Context())
-	if err != nil {
-		c.Header("Retry-After", "2")
-		writeProblem(c, http.StatusServiceUnavailable, "image_processing_busy", "图像处理繁忙，请稍后重试")
-		return
-	}
-	defer release()
-	c.Request = c.Request.WithContext(ctx)
-	header, err := services.DownloadRemoteImage(c.Request.Context(), input.URL, int64(setting.MaxFileSize))
-	switch {
-	case errors.Is(err, services.ErrImportURLInvalid):
-		writeProblem(c, http.StatusUnprocessableEntity, "invalid_import_url", "只允许有效的 HTTP/HTTPS 图片 URL")
-		return
-	case errors.Is(err, services.ErrImportSSRF):
-		writeProblem(c, http.StatusForbidden, "remote_address_forbidden", "URL 指向禁止访问的网络地址")
-		return
-	case errors.Is(err, services.ErrImportTooLarge):
-		writeProblem(c, http.StatusUnprocessableEntity, "remote_image_too_large", "远端图片超过单文件大小限制")
-		return
-	case errors.Is(err, services.ErrImportNotImage):
-		writeProblem(c, http.StatusUnprocessableEntity, "remote_content_not_image", "远端内容不是有效图片")
-		return
-	case err != nil:
-		writeProblem(c, http.StatusBadGateway, "remote_image_download_failed", "下载远端图片失败")
+	maxFileSize := int64(setting.MaxFileSize)
+	importer := s.services.Imports
+	if err := importer.ValidateURL(input.URL); err != nil {
+		writeImportProblem(c, err)
 		return
 	}
 	bucketID := 0
 	if input.BucketID != nil {
 		bucketID = *input.BucketID
 	}
+	tagIDs := positiveUnique(input.TagIDs)
 	principal, _ := principalFrom(c)
-	results, err := s.services.Uploads.UploadBatch(c, *principal.User, []*multipart.FileHeader{header}, bucketID, positiveUnique(input.TagIDs))
-	if errors.Is(err, services.ErrStorageDisabled) {
-		writeProblem(c, http.StatusConflict, "storage_disabled", "该存储已停用，不能上传新文件")
+	// Authorization and storage checks run before any outbound request.
+	if err := s.services.Uploads.ResolveTargetBucket(*principal.User, bucketID, tagIDs); err != nil {
+		if !writeUploadTargetProblem(c, err) {
+			writeProblem(c, http.StatusInternalServerError, "image_import_failed", "导入图片失败")
+		}
 		return
 	}
-	if errors.Is(err, services.ErrBucketAccess) {
-		writeProblem(c, http.StatusForbidden, "storage_access_denied", "无权使用该存储桶")
+	ticket, err := importer.Begin(principal.User.ID, maxFileSize)
+	if err != nil {
+		writeImportProblem(c, err)
 		return
 	}
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		writeProblem(c, http.StatusUnprocessableEntity, "validation_error", "包含不存在的标签或存储桶")
+	defer ticket.End()
+	form, header, err := importer.Fetch(c.Request.Context(), ticket, input.URL)
+	if err != nil {
+		writeImportProblem(c, err)
+		return
+	}
+	defer form.RemoveAll()
+	results, err := s.services.Uploads.UploadBatch(c, *principal.User, []*multipart.FileHeader{header}, bucketID, tagIDs)
+	if err != nil && writeUploadTargetProblem(c, err) {
 		return
 	}
 	if err != nil || len(results) != 1 {
@@ -531,6 +523,59 @@ func (s *Server) importImage(c *gin.Context) {
 	}
 	c.Header("Location", "/api/v1/images/"+itoa(item.Image.Id))
 	writeData(c, http.StatusCreated, toImageDTO(item), nil)
+}
+
+func writeUploadTargetProblem(c *gin.Context, err error) bool {
+	switch {
+	case errors.Is(err, services.ErrStorageDisabled):
+		writeProblem(c, http.StatusConflict, "storage_disabled", "该存储已停用，不能上传新文件")
+	case errors.Is(err, services.ErrBucketAccess):
+		writeProblem(c, http.StatusForbidden, "storage_access_denied", "无权使用该存储桶")
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		writeProblem(c, http.StatusUnprocessableEntity, "validation_error", "包含不存在的标签或存储桶")
+	default:
+		return false
+	}
+	return true
+}
+
+// statusClientClosedRequest is recorded in access logs when the client went
+// away mid-import, so it is not mistaken for an upstream failure.
+const statusClientClosedRequest = 499
+
+func writeImportProblem(c *gin.Context, err error) {
+	// A canceled request also fails the outbound fetch, so it is checked first.
+	if errors.Is(c.Request.Context().Err(), context.Canceled) {
+		c.AbortWithStatus(statusClientClosedRequest)
+		return
+	}
+	status, code, detail, retryAfter := classifyImportError(err)
+	if retryAfter > 0 {
+		c.Header("Retry-After", strconv.Itoa(retryAfter))
+	}
+	writeProblem(c, status, code, detail)
+}
+
+func classifyImportError(err error) (status int, code, detail string, retryAfter int) {
+	switch {
+	case errors.Is(err, services.ErrImportURLInvalid):
+		return http.StatusUnprocessableEntity, "invalid_import_url", "只允许有效的 HTTP/HTTPS 图片 URL", 0
+	// Matched before timeouts: a dial-time policy rejection arrives wrapped in *net.OpError.
+	case errors.Is(err, services.ErrImportSSRF):
+		return http.StatusForbidden, "remote_address_forbidden", "URL 指向禁止访问的网络地址", 0
+	case errors.Is(err, services.ErrImportTooLarge):
+		return http.StatusUnprocessableEntity, "remote_image_too_large", "远端图片超过单文件大小限制", 0
+	case errors.Is(err, services.ErrImportNotImage):
+		return http.StatusUnprocessableEntity, "remote_content_not_image", "远端内容不是有效图片", 0
+	case errors.Is(err, services.ErrImportUserBusy):
+		return http.StatusTooManyRequests, "import_concurrency_exceeded", "同时进行的远程导入过多，请等待当前导入完成", 5
+	case errors.Is(err, services.ErrImportBusy):
+		return http.StatusServiceUnavailable, "import_busy", "远程导入繁忙，请稍后重试", 5
+	case services.IsImportTimeout(err):
+		return http.StatusGatewayTimeout, "remote_image_too_slow", "远端图片下载过慢或超时", 0
+	default:
+		return http.StatusBadGateway, "remote_image_download_failed", "下载远端图片失败", 0
+	}
 }
 
 func uploadError(err error) (string, string, int) {

@@ -1112,9 +1112,17 @@ export type ImportImageErrors = {
      */
     422: Problem;
     /**
-     * image_processing_busy，图像处理繁忙
+     * 暂时无法处理，按 Retry-After 重试
+     */
+    429: Problem;
+    /**
+     * 暂时无法处理，按 Retry-After 重试
      */
     503: Problem;
+    /**
+     * RFC 9457 问题详情
+     */
+    504: Problem;
     /**
      * RFC 9457 问题详情
      */

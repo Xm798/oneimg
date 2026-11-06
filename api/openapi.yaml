@@ -311,7 +311,7 @@ paths:
     post:
       operationId: importImage
       summary: 导入远程图片
-      description: 无效格式或超出图像预算返回 422；目标存储已停用返回 409 storage_disabled；处理繁忙返回 503 和 Retry-After，客户端应稍后重试。
+      description: 先检查 URL、目标存储和标签，再下载远端图片。无效格式或超出图像预算返回 422；目标存储已停用返回 409 storage_disabled；同一用户同时进行的导入过多返回 429 import_concurrency_exceeded；导入容量已满返回 503 import_busy，处理繁忙返回 503 image_processing_busy，两者都带 Retry-After，客户端应稍后重试；远端停滞、过慢或超时返回 504 remote_image_too_slow，其他远端失败返回 502 remote_image_download_failed。
       tags: [Images]
       requestBody:
         required: true
@@ -320,7 +320,9 @@ paths:
         '201': { $ref: '#/components/responses/ImageResponse' }
         '409': { $ref: '#/components/responses/ProblemResponse' }
         '422': { $ref: '#/components/responses/ProblemResponse' }
-        '503': { $ref: '#/components/responses/ImageProcessingBusyResponse' }
+        '429': { $ref: '#/components/responses/RetryAfterProblemResponse' }
+        '503': { $ref: '#/components/responses/RetryAfterProblemResponse' }
+        '504': { $ref: '#/components/responses/ProblemResponse' }
         default: { $ref: '#/components/responses/ProblemResponse' }
   /images/{image_id}/tags/{tag_id}:
     parameters:
@@ -670,6 +672,12 @@ components:
     ProblemResponse:
       description: RFC 9457 问题详情
       headers: { X-Request-ID: { schema: { type: string } } }
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    RetryAfterProblemResponse:
+      description: 暂时无法处理，按 Retry-After 重试
+      headers:
+        X-Request-ID: { schema: { type: string } }
+        Retry-After: { schema: { type: integer, minimum: 1 }, description: 重试前至少等待的秒数 }
       content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
     ImageProcessingBusyResponse:
       description: image_processing_busy，图像处理繁忙
