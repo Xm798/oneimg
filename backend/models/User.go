@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -160,12 +161,20 @@ func EffectiveCodes(u User) []string {
 	return FilterPermissionCodes(u.Permission.Codes)
 }
 
+// Can matches EffectiveCodes without allocating, as request middleware calls
+// it on every authorised request.
 func Can(u User, code string) bool {
 	if u.ID == SuperAdminID {
 		return true
 	}
-	for _, current := range EffectiveCodes(u) {
-		if current == code {
+	if u.Role != RoleAdmin {
+		return false
+	}
+	if _, known := permissionNames[code]; !known {
+		return false
+	}
+	for _, current := range u.Permission.Codes {
+		if current == code || current == "*" {
 			return true
 		}
 	}
@@ -186,23 +195,21 @@ func Covers(actor, target User) bool {
 	if target.Role != RoleAdmin {
 		return false
 	}
+	// EffectiveCodes deduplicates, so a subset with fewer codes is strict.
 	targetCodes := EffectiveCodes(target)
 	actorCodes := EffectiveCodes(actor)
-	return IsCodeSubset(targetCodes, actorCodes) && len(targetCodes) < len(actorCodes)
+	return UnheldCode(targetCodes, actorCodes) == "" && len(targetCodes) < len(actorCodes)
 }
 
-// IsCodeSubset expects both slices to be deduplicated, as EffectiveCodes returns.
-func IsCodeSubset(codes, held []string) bool {
-	set := make(map[string]struct{}, len(held))
-	for _, code := range held {
-		set[code] = struct{}{}
-	}
+// UnheldCode returns the first of codes missing from held, or "" when held
+// contains them all.
+func UnheldCode(codes, held []string) string {
 	for _, code := range codes {
-		if _, ok := set[code]; !ok {
-			return false
+		if !slices.Contains(held, code) {
+			return code
 		}
 	}
-	return true
+	return ""
 }
 
 func IntSliceContains(arr []int, target int) bool {

@@ -157,9 +157,6 @@ func requestedSettingGroups(c *gin.Context, user models.User) ([]string, bool) {
 }
 
 func canAccessSettingGroup(user models.User, group string) bool {
-	if user.ID == models.SuperAdminID {
-		return true
-	}
 	return models.Can(user, settingGroupPermission[group])
 }
 

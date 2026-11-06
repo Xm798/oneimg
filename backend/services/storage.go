@@ -426,10 +426,8 @@ func (s *StorageService) deleteBucketRecords(id int, bucket models.Buckets) erro
 }
 
 func (s *StorageService) TestConnection(ctx context.Context, actor models.User, input StorageInput, existingID *int) (string, error) {
-	can := func(code string) bool {
-		return models.Can(actor, code)
-	}
-	if (existingID != nil && !can("storage:update")) || (existingID == nil && !can("storage:create") && !can("storage:update")) {
+	canUpdate := models.Can(actor, "storage:update")
+	if (existingID != nil && !canUpdate) || (existingID == nil && !models.Can(actor, "storage:create") && !canUpdate) {
 		return "", ErrPermissionDenied
 	}
 	if existingID != nil {

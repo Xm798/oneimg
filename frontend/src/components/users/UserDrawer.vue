@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { api, ApiError, errorMessage, type ManagedUser } from '@/api/client.ts'
+import { api, ApiError, errorMessage, isStaleError, type ManagedUser } from '@/api/client.ts'
 import { usernameError } from '@/components/auth/auth'
 import StorageTypeIcon from '@/components/storage/StorageTypeIcon.vue'
 import { toast, UiAvatar, UiButton, UiDrawer, UiField, UiInput, UiSegmented, UiSwitch } from '@/components/ui'
-import { effectiveCodes, isSuperAdmin, ROLE_ADMIN, ROLE_USER } from '@/utils/permissions.ts'
+import { canManage, effectiveCodes, ROLE_ADMIN, ROLE_USER } from '@/utils/permissions.ts'
 import { ALL_CODES, PERMISSION_GROUPS } from './permissions'
 import type { UserStorage } from './types'
 
@@ -47,11 +47,9 @@ const roleOptions = [
 
 const heldCodes = computed(() => effectiveCodes(props.actor))
 const holds = (code: string) => heldCodes.value.includes(code)
-// An equal set makes the target a peer that only a higher admin can manage.
-const becomesPeer = computed(() => isAdminDraft.value && !isSuperAdmin(props.actor) && draft.codes.length >= heldCodes.value.length)
+const becomesPeer = computed(() => isAdminDraft.value && !canManage({ id: props.user?.id, role: ROLE_ADMIN, permission: { codes: draft.codes } }, props.actor))
 
 const toggleCode = (code: string, on: boolean) => {
-  if (!holds(code)) return
   draft.codes = on ? [...new Set([...draft.codes, code])] : draft.codes.filter(item => item !== code)
 }
 const heldItems = (codes: readonly { code: string }[]) => codes.map(item => item.code).filter(holds)
@@ -115,8 +113,7 @@ const save = async () => {
       emit('saved')
     } else {
       toast.error(message)
-      const status = error instanceof ApiError ? error.problem?.status : 0
-      if (status === 403 || status === 409) emit('saved')
+      if (isStaleError(error)) emit('saved')
     }
   } finally {
     saving.value = false

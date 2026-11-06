@@ -45,6 +45,9 @@ const transportMessages: Record<TransportError['kind'], string | undefined> = {
 }
 
 /** 接口错误的提示文字：限流时说明等待时间，其他情况用服务器的 detail */
+/** A 403 or 409 means the caller acted on stale roles or permissions; reload before retrying. */
+export const isStaleError = (error: unknown) => error instanceof ApiError && [403, 409].includes(Number(error.problem?.status))
+
 export const errorMessage = (error: unknown, fallback: string) => {
   if (error instanceof TransportError) return transportMessages[error.kind] ?? fallback
   if (!(error instanceof ApiError)) return fallback

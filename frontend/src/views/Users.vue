@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api, ApiError, errorMessage, type ManagedUser } from '@/api/client.ts'
+import { api, errorMessage, isStaleError, type ManagedUser } from '@/api/client.ts'
 import LinkBox from '@/components/media/LinkBox.vue'
 import { confirm, toast, UiAvatar, UiButton, UiDialog, UiMenu, UiMenuItem, UiMenuSeparator, UiSegmented } from '@/components/ui'
 import UserCreateDialog from '@/components/users/UserCreateDialog.vue'
@@ -9,7 +9,7 @@ import UserDrawer from '@/components/users/UserDrawer.vue'
 import { ALL_CODES } from '@/components/users/permissions'
 import type { UserStorage } from '@/components/users/types'
 import { useSession } from '@/composables/useSession'
-import { canManage, hasPermission, ROLE_ADMIN, SUPER_ADMIN_ID } from '@/utils/permissions.ts'
+import { canManage, effectiveCodes, hasPermission, ROLE_ADMIN, SUPER_ADMIN_ID } from '@/utils/permissions.ts'
 
 const PAGE_SIZE = 20
 const route = useRoute()
@@ -110,16 +110,13 @@ onMounted(() => {
 
 /* ---------- 显示 ---------- */
 const manageable = (user: ManagedUser) => canManage(user, me.value)
-// A 403 or 409 means the listed roles or codes are stale; reload so the actions match the server.
 const reloadOnStale = (error: unknown) => {
-  const status = error instanceof ApiError ? error.problem?.status : 0
-  if (status === 403 || status === 409) void load()
+  if (isStaleError(error)) void load()
 }
 const codeCount = (user: ManagedUser) => {
   if (user.role !== ROLE_ADMIN) return '—'
-  const codes = user.permission?.codes ?? []
-  if (user.id === SUPER_ADMIN_ID || codes.includes('*')) return '全部'
-  return `${codes.filter(code => ALL_CODES.includes(code)).length} / ${ALL_CODES.length}`
+  if (user.id === SUPER_ADMIN_ID || (user.permission?.codes ?? []).includes('*')) return '全部'
+  return `${effectiveCodes(user).length} / ${ALL_CODES.length}`
 }
 const storageName = (id: number) => {
   const storage = storages.value.find(item => item.id === id)

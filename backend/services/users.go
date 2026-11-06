@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -26,7 +25,6 @@ var (
 	ErrBucketNotFound   = errors.New("storage bucket does not exist")
 
 	ErrUserNotManageable  = errors.New("target user holds permissions the actor lacks")
-	ErrPermissionNotHeld  = errors.New("permission code is not held by the actor")
 	ErrRoleUpdateRequired = errors.New("creating an admin requires the role update permission")
 	ErrActorNotPermitted  = errors.New("actor no longer holds the required permission")
 	// ErrConcurrentUpdate means the operation rolled back without effect because
@@ -37,10 +35,8 @@ var (
 type PermissionNotHeldError struct{ Code string }
 
 func (e *PermissionNotHeldError) Error() string {
-	return ErrPermissionNotHeld.Error() + ": " + e.Code
+	return "permission code is not held by the actor: " + e.Code
 }
-
-func (e *PermissionNotHeldError) Is(target error) bool { return target == ErrPermissionNotHeld }
 
 // UserAuditEvent never carries usernames or passwords. Code is the problem
 // code of a non-ok outcome.
@@ -198,25 +194,38 @@ func checkProtected(actorID, id int) error {
 	return nil
 }
 
+// UserErrorCode returns the problem code of a user-management denial or
+// conflict, shared by the audit log and the API response; "" for other errors.
+func UserErrorCode(err error) string {
+	var notHeld *PermissionNotHeldError
+	switch {
+	case errors.Is(err, ErrProtectedUser):
+		return "protected_user"
+	case errors.Is(err, ErrUserNotManageable):
+		return "user_not_manageable"
+	case errors.As(err, &notHeld):
+		return "permission_not_held"
+	case errors.Is(err, ErrRoleUpdateRequired), errors.Is(err, ErrActorNotPermitted):
+		return "permission_denied"
+	case errors.Is(err, ErrConcurrentUpdate):
+		return "concurrent_update_conflict"
+	}
+	return ""
+}
+
 // finish classifies err for callers and the audit log. Write conflicts and a
 // concurrently rotated auth version become ErrConcurrentUpdate.
 func (s *UserService) finish(op string, actorID, targetID int, err error) error {
 	if err != nil && (database.IsWriteConflict(err) || errors.Is(err, ErrAuthVersion)) {
 		err = fmt.Errorf("%w: %v", ErrConcurrentUpdate, err)
 	}
-	event := UserAuditEvent{Op: op, ActorID: actorID, TargetID: targetID, Outcome: "ok"}
+	event := UserAuditEvent{Op: op, ActorID: actorID, TargetID: targetID, Outcome: "ok", Code: UserErrorCode(err)}
 	switch {
 	case err == nil:
-	case errors.Is(err, ErrProtectedUser):
-		event.Outcome, event.Code = "denied", "protected_user"
-	case errors.Is(err, ErrUserNotManageable):
-		event.Outcome, event.Code = "denied", "user_not_manageable"
-	case errors.Is(err, ErrPermissionNotHeld):
-		event.Outcome, event.Code = "denied", "permission_not_held"
-	case errors.Is(err, ErrRoleUpdateRequired), errors.Is(err, ErrActorNotPermitted):
-		event.Outcome, event.Code = "denied", "permission_denied"
-	case errors.Is(err, ErrConcurrentUpdate):
-		event.Outcome, event.Code = "conflict", "concurrent_update_conflict"
+	case event.Code == "concurrent_update_conflict":
+		event.Outcome = "conflict"
+	case event.Code != "":
+		event.Outcome = "denied"
 	default:
 		event.Outcome = "error"
 	}
@@ -378,11 +387,8 @@ func (s *UserService) setPermissions(actor models.User, id int, permission model
 		if target.Role != models.RoleAdmin {
 			permission.Codes = []string{}
 		}
-		held := models.EffectiveCodes(fresh)
-		for _, code := range permission.Codes {
-			if !slices.Contains(held, code) {
-				return &PermissionNotHeldError{Code: code}
-			}
+		if code := models.UnheldCode(permission.Codes, models.EffectiveCodes(fresh)); code != "" {
+			return &PermissionNotHeldError{Code: code}
 		}
 		if len(permission.Buckets) > 0 {
 			var count int64

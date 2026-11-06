@@ -19,13 +19,6 @@ export const getPermissionCodes = (user = getStoredUser()) => {
 
 export const isSuperAdmin = (user = getStoredUser()) => Number(user?.id ?? user?.ID) === SUPER_ADMIN_ID
 
-export const hasPermission = (code, user = getStoredUser()) => {
-  if (isSuperAdmin(user)) return true
-  if (Number(user?.role ?? user?.Role) !== ROLE_ADMIN) return false
-  const codes = getPermissionCodes(user)
-  return codes.includes('*') || codes.includes(code)
-}
-
 /** Mirrors models.EffectiveCodes: "*" expands to every code and unknown codes grant nothing. */
 export const effectiveCodes = (user = getStoredUser()): string[] => {
   if (isSuperAdmin(user)) return [...ALL_CODES]
@@ -34,6 +27,8 @@ export const effectiveCodes = (user = getStoredUser()): string[] => {
   if (codes.includes('*')) return [...ALL_CODES]
   return ALL_CODES.filter(code => codes.includes(code))
 }
+
+export const hasPermission = (code, user = getStoredUser()) => effectiveCodes(user).includes(code)
 
 /** Mirrors models.Covers: plain users and admins holding a strict subset of the actor's codes. */
 export const canManage = (target, user = getStoredUser()) => {

@@ -57,7 +57,7 @@ func TestUserServiceDecidesOnTheActorRowInsideTheTransaction(t *testing.T) {
 		t.Fatalf("ResetPassword with a stale actor err = %v", err)
 	}
 	lower := createHierarchyAdmin(t, db, "lower", "user:password:reset")
-	if _, err := service.SetPermissions(stale, lower.ID, models.Permission{Codes: []string{"storage:delete"}}); !errors.Is(err, ErrPermissionNotHeld) {
+	if _, err := service.SetPermissions(stale, lower.ID, models.Permission{Codes: []string{"storage:delete"}}); !errors.As(err, new(*PermissionNotHeldError)) {
 		t.Fatalf("granting a code only the stale struct holds err = %v", err)
 	}
 	if got := storedUser(t, db, lower.ID).Permission.Codes; !reflect.DeepEqual(got, []string{"user:password:reset"}) {

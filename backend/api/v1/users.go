@@ -166,26 +166,38 @@ func (s *Server) revokeUserPasskeys(c *gin.Context) {
 	writeNoContent(c)
 }
 
+var userDenialDetails = map[string]string{
+	"protected_user":             "不能修改超级管理员或当前登录用户",
+	"user_not_manageable":        "只能管理权限少于自己的管理员和普通用户",
+	"permission_denied":          "当前账号已无此权限",
+	"concurrent_update_conflict": "用户数据刚被其他操作修改，请刷新后重试",
+}
+
+func writeUserDenial(c *gin.Context, code string, err error) {
+	status, detail := http.StatusForbidden, userDenialDetails[code]
+	var notHeld *services.PermissionNotHeldError
+	switch {
+	case code == "concurrent_update_conflict":
+		status = http.StatusConflict
+	case errors.As(err, &notHeld):
+		detail = "不能授予自己没有的权限: " + models.PermissionName(notHeld.Code)
+	case errors.Is(err, services.ErrRoleUpdateRequired):
+		detail = "缺少权限: " + models.PermissionName("user:role:update")
+	}
+	writeProblem(c, status, code, detail)
+}
+
 func handleUserError(c *gin.Context, err error) bool {
 	if err == nil {
 		return false
 	}
-	var notHeld *services.PermissionNotHeldError
+	if code := services.UserErrorCode(err); code != "" {
+		writeUserDenial(c, code, err)
+		return true
+	}
 	switch {
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		writeProblem(c, http.StatusNotFound, "user_not_found", "用户不存在")
-	case errors.Is(err, services.ErrProtectedUser):
-		writeProblem(c, http.StatusForbidden, "protected_user", "不能修改超级管理员或当前登录用户")
-	case errors.Is(err, services.ErrUserNotManageable):
-		writeProblem(c, http.StatusForbidden, "user_not_manageable", "只能管理权限少于自己的管理员和普通用户")
-	case errors.As(err, &notHeld):
-		writeProblem(c, http.StatusForbidden, "permission_not_held", "不能授予自己没有的权限: "+models.PermissionName(notHeld.Code))
-	case errors.Is(err, services.ErrRoleUpdateRequired):
-		writeProblem(c, http.StatusForbidden, "permission_denied", "缺少权限: "+models.PermissionName("user:role:update"))
-	case errors.Is(err, services.ErrActorNotPermitted):
-		writeProblem(c, http.StatusForbidden, "permission_denied", "当前账号已无此权限")
-	case errors.Is(err, services.ErrConcurrentUpdate):
-		writeProblem(c, http.StatusConflict, "concurrent_update_conflict", "用户数据刚被其他操作修改，请刷新后重试")
 	case errors.Is(err, models.ErrPermissionCodeInvalid):
 		writeProblem(c, http.StatusUnprocessableEntity, "validation_error", err.Error())
 	case errors.Is(err, services.ErrUsernameInvalid):
