@@ -21,12 +21,10 @@ const (
 // slot: in-flight permits per user ID and globally, plus a spool byte budget
 // that is reserved as bytes arrive rather than up front.
 type importLimiter struct {
-	mu          sync.Mutex
-	users       map[int]*importUsage
-	inFlight    int
-	reserved    int64
-	maxPerUser  int
-	maxInFlight int
+	mu       sync.Mutex
+	users    map[int]*importUsage
+	inFlight int
+	reserved int64
 }
 
 type importUsage struct {
@@ -38,29 +36,25 @@ type ImportTicket struct {
 	limiter     *importLimiter
 	userID      int
 	maxFileSize int64
-	budget      int64
-	userCap     int64
 	reserved    int64
 	once        sync.Once
 }
 
 func newImportLimiter() *importLimiter {
-	return &importLimiter{users: map[int]*importUsage{}, maxPerUser: importMaxPerUser, maxInFlight: importMaxInFlight}
+	return &importLimiter{users: map[int]*importUsage{}}
 }
 
 // Begin takes the per-user and global permits without waiting. Permits are
 // keyed by user ID so that minting more tokens does not multiply them.
 func (l *importLimiter) Begin(userID int, maxFileSize int64) (*ImportTicket, error) {
-	budget := max(importMinBudget, 2*maxFileSize)
-	// userCap ≤ budget/2 because budget ≥ 2×maxFileSize, so one user never holds the whole budget.
-	ticket := &ImportTicket{limiter: l, userID: userID, maxFileSize: maxFileSize, budget: budget, userCap: max(maxFileSize, budget/4)}
+	ticket := &ImportTicket{limiter: l, userID: userID, maxFileSize: maxFileSize}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	usage := l.users[userID]
-	if usage != nil && usage.inFlight >= l.maxPerUser {
+	if usage != nil && usage.inFlight >= importMaxPerUser {
 		return nil, ErrImportUserBusy
 	}
-	if l.inFlight >= l.maxInFlight {
+	if l.inFlight >= importMaxInFlight {
 		return nil, ErrImportBusy
 	}
 	if usage == nil {
@@ -76,13 +70,18 @@ func (l *importLimiter) Begin(userID int, maxFileSize int64) (*ImportTicket, err
 // a slow sender reserves little more than it has delivered. Requires
 // need ≤ maxFileSize+1.
 func (t *ImportTicket) Grow(need int64) error {
+	// Only the goroutine that owns the ticket changes t.reserved, so it can be read unlocked.
+	if t.reserved >= need {
+		return nil
+	}
+	budget, userCap := t.budget(), t.userCap()
 	l := t.limiter
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	usage := l.users[t.userID]
 	for t.reserved < need {
 		step := min(importReserveStep, t.maxFileSize+1-t.reserved)
-		if step <= 0 || l.reserved+step > t.budget || usage.reserved+step > t.userCap {
+		if step <= 0 || l.reserved+step > budget || usage.reserved+step > userCap {
 			return ErrImportBusy
 		}
 		l.reserved += step
@@ -90,6 +89,15 @@ func (t *ImportTicket) Grow(need int64) error {
 		t.reserved += step
 	}
 	return nil
+}
+
+func (t *ImportTicket) budget() int64 {
+	return max(importMinBudget, 2*t.maxFileSize)
+}
+
+// userCap ≤ budget/2 because budget ≥ 2×maxFileSize, so one user never holds the whole budget.
+func (t *ImportTicket) userCap() int64 {
+	return max(t.maxFileSize, t.budget()/4)
 }
 
 func (t *ImportTicket) End() {

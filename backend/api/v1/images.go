@@ -405,16 +405,7 @@ func (s *Server) uploadImages(c *gin.Context) {
 	}
 	principal, _ := principalFrom(c)
 	results, err := s.services.Uploads.UploadBatch(c, *principal.User, files, bucketID, tagIDs)
-	if errors.Is(err, services.ErrStorageDisabled) {
-		writeProblem(c, http.StatusConflict, "storage_disabled", "该存储已停用，不能上传新文件")
-		return
-	}
-	if errors.Is(err, services.ErrBucketAccess) {
-		writeProblem(c, http.StatusForbidden, "storage_access_denied", "无权使用该存储桶")
-		return
-	}
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		writeProblem(c, http.StatusUnprocessableEntity, "validation_error", "包含不存在的标签或存储桶")
+	if err != nil && writeUploadTargetProblem(c, err) {
 		return
 	}
 	if err != nil {
@@ -482,7 +473,7 @@ func (s *Server) importImage(c *gin.Context) {
 	tagIDs := positiveUnique(input.TagIDs)
 	principal, _ := principalFrom(c)
 	// Authorization and storage checks run before any outbound request.
-	if err := s.services.Uploads.ResolveTargetBucket(*principal.User, bucketID, tagIDs); err != nil {
+	if err := s.services.Uploads.ResolveTargetBucket(*principal.User, setting, bucketID, tagIDs); err != nil {
 		if !writeUploadTargetProblem(c, err) {
 			writeProblem(c, http.StatusInternalServerError, "image_import_failed", "导入图片失败")
 		}

@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"image"
-	"image/png"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -46,9 +44,7 @@ func newImportFixture(t *testing.T) (*importFixture, *gin.Engine) {
 	t.Chdir(t.TempDir())
 	images.InitImageService()
 	router, system := setupTestRouter(t, &config.Config{SqlitePath: filepath.Join(t.TempDir(), "db"), SessionSecret: "test", ConfigSecret: "test"})
-	importer := services.NewRemoteImporter(services.ImportConfig{Policy: loopbackImportPolicy})
-	t.Cleanup(importer.Close)
-	system.Services.Imports = importer
+	system.Services.Imports = services.NewRemoteImporter(services.ImportConfig{Policy: loopbackImportPolicy})
 	db := system.Database.DB
 	for _, bucket := range []models.Buckets{{Id: 1, Name: "primary", Type: "default"}, {Id: 2, Name: "restricted", Type: "default"}, {Id: 3, Name: "disabled", Type: "default", Disabled: true}} {
 		if err := db.Create(&bucket).Error; err != nil {
@@ -92,15 +88,6 @@ func (f *importFixture) assertNoSpool() {
 	if len(matches) != 0 {
 		f.t.Fatalf("spool files left behind: %v", matches)
 	}
-}
-
-func importTestPNG(t *testing.T, width int) []byte {
-	t.Helper()
-	var encoded bytes.Buffer
-	if err := png.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, width, 8))); err != nil {
-		t.Fatal(err)
-	}
-	return encoded.Bytes()
 }
 
 // gatedServer answers /stall/* only after release is closed and everything else at once.
@@ -182,7 +169,7 @@ func (f *importFixture) assertPermitsReleased(gated *gatedServer) {
 
 func TestImportImageSuccess(t *testing.T) {
 	fixture, _ := newImportFixture(t)
-	server := newGatedServer(t, importTestPNG(t, 12))
+	server := newGatedServer(t, testAvatarPNG(t, 12, 8))
 	response := fixture.importURL(fixture.admin, server.URL+"/photo.png")
 	if response.Code != http.StatusCreated || !strings.HasPrefix(response.Header().Get("Location"), "/api/v1/images/") {
 		t.Fatal(response.Code, response.Body.String())
@@ -200,7 +187,7 @@ func TestImportImageSuccess(t *testing.T) {
 
 func TestImportImageSlowServerDoesNotBlockUploads(t *testing.T) {
 	fixture, router := newImportFixture(t)
-	server := newGatedServer(t, importTestPNG(t, 12))
+	server := newGatedServer(t, testAvatarPNG(t, 12, 8))
 	imported := make(chan *httptest.ResponseRecorder, 1)
 	go func() { imported <- fixture.importURL(fixture.admin, server.URL+"/stall/slow.png") }()
 	server.waitArrivals(t, 1)
@@ -211,7 +198,7 @@ func TestImportImageSlowServerDoesNotBlockUploads(t *testing.T) {
 		"Content-Disposition": {`form-data; name="images"; filename="other.png"`},
 		"Content-Type":        {"image/png"},
 	})
-	part.Write(importTestPNG(t, 20))
+	part.Write(testAvatarPNG(t, 20, 8))
 	writer.Close()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/images", &body)
 	request.Header.Set("Content-Type", writer.FormDataContentType())
@@ -230,7 +217,7 @@ func TestImportImageSlowServerDoesNotBlockUploads(t *testing.T) {
 
 func TestImportImageChecksAccessBeforeDownload(t *testing.T) {
 	fixture, _ := newImportFixture(t)
-	server := newGatedServer(t, importTestPNG(t, 12))
+	server := newGatedServer(t, testAvatarPNG(t, 12, 8))
 	for _, test := range []struct {
 		name  string
 		token string
@@ -256,7 +243,7 @@ func TestImportImageChecksAccessBeforeDownload(t *testing.T) {
 
 func TestImportImagePerUserConcurrency(t *testing.T) {
 	fixture, _ := newImportFixture(t)
-	server := newGatedServer(t, importTestPNG(t, 12))
+	server := newGatedServer(t, testAvatarPNG(t, 12, 8))
 	responses := make(chan *httptest.ResponseRecorder, 2)
 	for _, name := range []string{"a", "b"} {
 		go func() { responses <- fixture.importURL(fixture.admin, server.URL+"/stall/"+name+".png") }()
@@ -281,7 +268,7 @@ func TestImportImagePerUserConcurrency(t *testing.T) {
 
 func TestImportImageProcessingBusy(t *testing.T) {
 	fixture, _ := newImportFixture(t)
-	server := newGatedServer(t, importTestPNG(t, 12))
+	server := newGatedServer(t, testAvatarPNG(t, 12, 8))
 	_, release, err := images.AcquireProcessing(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -297,7 +284,7 @@ func TestImportImageProcessingBusy(t *testing.T) {
 
 func TestImportImageClientCancel(t *testing.T) {
 	fixture, _ := newImportFixture(t)
-	server := newGatedServer(t, importTestPNG(t, 12))
+	server := newGatedServer(t, testAvatarPNG(t, 12, 8))
 	ctx, cancel := context.WithCancel(context.Background())
 	responses := make(chan *httptest.ResponseRecorder, 1)
 	go func() {

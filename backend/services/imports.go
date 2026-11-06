@@ -1,6 +1,7 @@
 package services
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -99,10 +100,6 @@ func NewRemoteImporter(cfg ImportConfig) *RemoteImporter {
 	return importer
 }
 
-func (r *RemoteImporter) Close() {
-	r.transport.CloseIdleConnections()
-}
-
 // Begin takes the import permits for userID; the caller must End the ticket.
 func (r *RemoteImporter) Begin(userID int, maxFileSize int64) (*ImportTicket, error) {
 	return r.limiter.Begin(userID, maxFileSize)
@@ -195,15 +192,13 @@ type rateReader struct {
 	cfg                 *ImportConfig
 	deadline            time.Time
 	contentLength       int64
-	started             bool
 	start, checkpointAt time.Time
 	checkpointBytes     int64
 	total               int64
 }
 
 func (r *rateReader) Read(p []byte) (int, error) {
-	if !r.started {
-		r.started = true
+	if r.start.IsZero() {
 		r.start = time.Now()
 		r.checkpointAt = r.start
 	}
@@ -272,7 +267,7 @@ func (r *RemoteImporter) Fetch(ctx context.Context, ticket *ImportTicket, rawURL
 	}
 	var rest io.Reader = body
 	if complete {
-		rest = eofReader{}
+		rest = http.NoBody
 	}
 
 	pr, pw := io.Pipe()
@@ -304,15 +299,12 @@ func (r *RemoteImporter) Fetch(ctx context.Context, ticket *ImportTicket, rawURL
 		pr.CloseWithError(readErr)
 		response.Body.Close()
 	}
-	writeErr := <-done
-	if writeErr != nil || readErr != nil {
+	// The writer's error is the root cause; the reader only sees its echo through the pipe.
+	if err := cmp.Or(<-done, readErr); err != nil {
 		if form != nil {
 			form.RemoveAll()
 		}
-		if writeErr != nil {
-			return nil, nil, writeErr
-		}
-		return nil, nil, readErr
+		return nil, nil, err
 	}
 	files := form.File["images"]
 	if len(files) != 1 {
@@ -331,10 +323,6 @@ func IsImportTimeout(err error) bool {
 		errors.Is(err, context.DeadlineExceeded) ||
 		(errors.As(err, &netErr) && netErr.Timeout())
 }
-
-type eofReader struct{}
-
-func (eofReader) Read([]byte) (int, error) { return 0, io.EOF }
 
 func importFileName(parsed *url.URL) string {
 	name := strings.NewReplacer("\r", "", "\n", "", `"`, "").Replace(path.Base(parsed.Path))

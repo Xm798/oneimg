@@ -33,9 +33,7 @@ func newTestImporter(t *testing.T, mutate func(*ImportConfig)) *RemoteImporter {
 	if mutate != nil {
 		mutate(&cfg)
 	}
-	importer := NewRemoteImporter(cfg)
-	t.Cleanup(importer.Close)
-	return importer
+	return NewRemoteImporter(cfg)
 }
 
 func testPNG(t *testing.T) []byte {

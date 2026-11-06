@@ -38,16 +38,16 @@ func NewUploadService(db *gorm.DB) *UploadService {
 // ResolveTargetBucket runs the upload target checks without taking storage
 // locks, so callers can reject a request before doing expensive work.
 // UploadBatch repeats the same checks under its locks.
-func (s *UploadService) ResolveTargetBucket(user models.User, bucketID int, tagIDs []int) error {
-	var setting models.Settings
-	if err := s.db.First(&setting).Error; err != nil {
-		return err
-	}
-	if bucketID == 0 {
-		bucketID = setting.DefaultStorage
-	}
-	_, _, err := s.resolveTarget(user, bucketID, tagIDs)
+func (s *UploadService) ResolveTargetBucket(user models.User, setting models.Settings, bucketID int, tagIDs []int) error {
+	_, _, err := s.resolveTarget(user, targetBucketID(setting, bucketID), tagIDs)
 	return err
+}
+
+func targetBucketID(setting models.Settings, bucketID int) int {
+	if bucketID == 0 {
+		return setting.DefaultStorage
+	}
+	return bucketID
 }
 
 func (s *UploadService) resolveTarget(user models.User, bucketID int, tagIDs []int) (models.Buckets, []int, error) {
@@ -96,9 +96,7 @@ func (s *UploadService) UploadBatch(c *gin.Context, user models.User, files []*m
 	if err := s.db.First(&setting).Error; err != nil {
 		return nil, err
 	}
-	if bucketID == 0 {
-		bucketID = setting.DefaultStorage
-	}
+	bucketID = targetBucketID(setting, bucketID)
 	unlockBucket := lockBucket(bucketID, false)
 	defer unlockBucket()
 	bucket, tagIDs, err := s.resolveTarget(user, bucketID, tagIDs)
