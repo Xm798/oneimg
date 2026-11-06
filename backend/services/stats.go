@@ -73,26 +73,26 @@ var sizeRanges = []struct {
 func (s *StatsService) Dashboard(user models.User) (DashboardStats, error) {
 	var result DashboardStats
 	now := s.now()
-	today := localDay(now)
 	month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	trendWindows := windows(now, "day", 7)
 
 	// Every column is self-gated by its CASE, so the scope's user filter is the only WHERE.
-	sums := newAggregate(s.db)
+	sums := &aggregate{db: s.db}
 	totalImages := sums.add("CASE WHEN " + models.VideoSQL + " THEN 0 ELSE 1 END")
 	totalVideos := sums.add("CASE WHEN " + models.VideoSQL + " THEN 1 ELSE 0 END")
 	totalSize := sums.add("file_size")
 	videoSize := sums.add("CASE WHEN " + models.VideoSQL + " THEN file_size ELSE 0 END")
-	todayColumns := sums.window(timeWindow{start: today, end: today.AddDate(0, 0, 1)})
 	monthColumns := sums.window(timeWindow{start: month, end: month.AddDate(0, 1, 0)})
 	trendColumns := sums.windows(trendWindows)
+	// The last trend window is today.
+	todayColumns := trendColumns[len(trendColumns)-1]
 	sizeColumns := make([]int, len(sizeRanges))
 	for i, item := range sizeRanges {
+		condition, args := "file_size >= ?", []any{item.min}
 		if item.max > 0 {
-			sizeColumns[i] = sums.add("CASE WHEN file_size >= ? AND file_size < ? THEN 1 ELSE 0 END", item.min, item.max)
-		} else {
-			sizeColumns[i] = sums.add("CASE WHEN file_size >= ? THEN 1 ELSE 0 END", item.min)
+			condition, args = condition+" AND file_size < ?", append(args, item.max)
 		}
+		sizeColumns[i] = sums.add("CASE WHEN "+condition+" THEN 1 ELSE 0 END", args...)
 	}
 	values, err := sums.scan(s.imageScope(user))
 	if err != nil {
@@ -137,7 +137,7 @@ func (s *StatsService) ImageTrend(user models.User, period string) ([]TrendPoint
 	if len(items) == 0 {
 		return []TrendPoint{}, nil
 	}
-	sums := newAggregate(s.db)
+	sums := &aggregate{db: s.db}
 	columns := sums.windows(items)
 	// The overall range only prunes rows; each column still applies its own window.
 	overall := timeWindow{start: items[0].start, end: items[len(items)-1].end}
@@ -217,8 +217,6 @@ type aggregate struct {
 	args    []any
 }
 
-func newAggregate(db *gorm.DB) *aggregate { return &aggregate{db: db} }
-
 func (a *aggregate) add(expression string, args ...any) int {
 	a.columns = append(a.columns, fmt.Sprintf("CAST(COALESCE(SUM(%s), 0) AS BIGINT)", expression))
 	a.args = append(a.args, args...)
@@ -245,24 +243,13 @@ func (a *aggregate) windows(items []timeWindow) []windowColumns {
 }
 
 func (a *aggregate) scan(scope *gorm.DB) ([]int64, error) {
-	rows, err := scope.Select(strings.Join(a.columns, ", "), a.args...).Rows()
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	values := make([]int64, len(a.columns))
 	targets := make([]any, len(values))
 	for i := range values {
 		targets[i] = &values[i]
 	}
-	if !rows.Next() {
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-		return nil, fmt.Errorf("aggregate returned no row")
-	}
-	if err := rows.Scan(targets...); err != nil {
+	if err := scope.Select(strings.Join(a.columns, ", "), a.args...).Row().Scan(targets...); err != nil {
 		return nil, err
 	}
-	return values, rows.Err()
+	return values, nil
 }
