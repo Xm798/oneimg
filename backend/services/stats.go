@@ -1,6 +1,8 @@
 package services
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"oneimg/backend/models"
@@ -59,44 +61,59 @@ func (s *StatsService) imageScope(user models.User) *gorm.DB {
 	return query
 }
 
+var sizeRanges = []struct {
+	name     string
+	min, max int64
+}{
+	{"< 100KB", 0, 100 * 1024}, {"100KB - 500KB", 100 * 1024, 500 * 1024},
+	{"500KB - 1MB", 500 * 1024, 1024 * 1024}, {"1MB - 5MB", 1024 * 1024, 5 * 1024 * 1024},
+	{"5MB - 10MB", 5 * 1024 * 1024, 10 * 1024 * 1024}, {">= 10MB", 10 * 1024 * 1024, 0},
+}
+
 func (s *StatsService) Dashboard(user models.User) (DashboardStats, error) {
 	var result DashboardStats
-	var err error
-	// GORM chain values retain clauses after use, so each aggregate starts from a fresh scope.
-	if err := s.imageScope(user).Where("NOT (" + models.VideoSQL + ")").Count(&result.TotalImages).Error; err != nil {
-		return result, err
-	}
-	if err := s.imageScope(user).Select("COALESCE(SUM(file_size), 0)").Scan(&result.TotalSize).Error; err != nil {
-		return result, err
-	}
-	if err := s.imageScope(user).Where(models.VideoSQL).Count(&result.TotalVideos).Error; err != nil {
-		return result, err
-	}
-	if err := s.imageScope(user).Where(models.VideoSQL).Select("COALESCE(SUM(file_size), 0)").Scan(&result.VideoSize).Error; err != nil {
-		return result, err
-	}
-	result.ImageSize = result.TotalSize - result.VideoSize
 	now := s.now()
 	today := localDay(now)
-	result.TodayUploads, err = countBetween(s.imageScope(user), today, today.AddDate(0, 0, 1))
-	if err != nil {
-		return result, err
-	}
 	month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-	result.MonthUploads, err = countBetween(s.imageScope(user), month, month.AddDate(0, 1, 0))
+	trendWindows := windows(now, "day", 7)
+
+	// Every column is self-gated by its CASE, so the scope's user filter is the only WHERE.
+	sums := newAggregate(s.db)
+	totalImages := sums.add("CASE WHEN " + models.VideoSQL + " THEN 0 ELSE 1 END")
+	totalVideos := sums.add("CASE WHEN " + models.VideoSQL + " THEN 1 ELSE 0 END")
+	totalSize := sums.add("file_size")
+	videoSize := sums.add("CASE WHEN " + models.VideoSQL + " THEN file_size ELSE 0 END")
+	todayColumns := sums.window(timeWindow{start: today, end: today.AddDate(0, 0, 1)})
+	monthColumns := sums.window(timeWindow{start: month, end: month.AddDate(0, 1, 0)})
+	trendColumns := sums.windows(trendWindows)
+	sizeColumns := make([]int, len(sizeRanges))
+	for i, item := range sizeRanges {
+		if item.max > 0 {
+			sizeColumns[i] = sums.add("CASE WHEN file_size >= ? AND file_size < ? THEN 1 ELSE 0 END", item.min, item.max)
+		} else {
+			sizeColumns[i] = sums.add("CASE WHEN file_size >= ? THEN 1 ELSE 0 END", item.min)
+		}
+	}
+	values, err := sums.scan(s.imageScope(user))
 	if err != nil {
 		return result, err
 	}
-	result.TodayVideoUploads, err = countBetween(s.imageScope(user).Where(models.VideoSQL), today, today.AddDate(0, 0, 1))
-	if err != nil {
-		return result, err
-	}
+	result.TotalImages = values[totalImages]
+	result.TotalVideos = values[totalVideos]
+	result.TotalSize = values[totalSize]
+	result.VideoSize = values[videoSize]
+	result.ImageSize = result.TotalSize - result.VideoSize
+	result.TodayUploads = values[todayColumns.all]
+	result.TodayVideoUploads = values[todayColumns.video]
 	result.TodayImageUploads = result.TodayUploads - result.TodayVideoUploads
-	result.MonthVideoUploads, err = countBetween(s.imageScope(user).Where(models.VideoSQL), month, month.AddDate(0, 1, 0))
-	if err != nil {
-		return result, err
-	}
+	result.MonthUploads = values[monthColumns.all]
+	result.MonthVideoUploads = values[monthColumns.video]
 	result.MonthImageUploads = result.MonthUploads - result.MonthVideoUploads
+	result.UploadTrend = trendPoints(trendWindows, trendColumns, values)
+	for i, item := range sizeRanges {
+		result.SizeDistribution = append(result.SizeDistribution, SizeStat{Range: item.name, Count: values[sizeColumns[i]]})
+	}
+
 	var recent []models.Image
 	if err := s.imageScope(user).Order("created_at DESC").Limit(10).Find(&recent).Error; err != nil {
 		return result, err
@@ -105,31 +122,8 @@ func (s *StatsService) Dashboard(user models.User) (DashboardStats, error) {
 	if err != nil {
 		return result, err
 	}
-	result.UploadTrend, err = trend(s.imageScope(user), now, "day", 7)
-	if err != nil {
-		return result, err
-	}
 	if err := s.imageScope(user).Select("mime_type format, COUNT(*) count, COALESCE(SUM(file_size), 0) size").Group("mime_type").Scan(&result.FormatStats).Error; err != nil {
 		return result, err
-	}
-	ranges := []struct {
-		name     string
-		min, max int64
-	}{
-		{"< 100KB", 0, 100 * 1024}, {"100KB - 500KB", 100 * 1024, 500 * 1024},
-		{"500KB - 1MB", 500 * 1024, 1024 * 1024}, {"1MB - 5MB", 1024 * 1024, 5 * 1024 * 1024},
-		{"5MB - 10MB", 5 * 1024 * 1024, 10 * 1024 * 1024}, {">= 10MB", 10 * 1024 * 1024, 0},
-	}
-	for _, item := range ranges {
-		var count int64
-		query := s.imageScope(user).Where("file_size >= ?", item.min)
-		if item.max > 0 {
-			query = query.Where("file_size < ?", item.max)
-		}
-		if err := query.Count(&count).Error; err != nil {
-			return result, err
-		}
-		result.SizeDistribution = append(result.SizeDistribution, SizeStat{Range: item.name, Count: count})
 	}
 	return result, nil
 }
@@ -139,60 +133,136 @@ func (s *StatsService) Images() *ImageService { return NewImageService(s.db) }
 
 func (s *StatsService) ImageTrend(user models.User, period string) ([]TrendPoint, error) {
 	counts := map[string]int{"day": 30, "week": 12, "month": 12, "year": 5}
-	return trend(s.imageScope(user), s.now(), period, counts[period])
+	items := windows(s.now(), period, counts[period])
+	if len(items) == 0 {
+		return []TrendPoint{}, nil
+	}
+	sums := newAggregate(s.db)
+	columns := sums.windows(items)
+	// The overall range only prunes rows; each column still applies its own window.
+	overall := timeWindow{start: items[0].start, end: items[len(items)-1].end}
+	condition, args := windowCondition(s.db, overall)
+	values, err := sums.scan(s.imageScope(user).Where(condition, args...))
+	if err != nil {
+		return nil, err
+	}
+	return trendPoints(items, columns, values), nil
 }
 
-func trend(scope *gorm.DB, now time.Time, period string, count int) ([]TrendPoint, error) {
-	result := make([]TrendPoint, 0, count)
+type timeWindow struct {
+	label      string
+	start, end time.Time
+}
+
+// windows lists count consecutive periods ending with the one containing now,
+// computed in now's location so day and month edges follow local DST rules.
+func windows(now time.Time, period string, count int) []timeWindow {
+	result := make([]timeWindow, 0, count)
 	for i := count - 1; i >= 0; i-- {
-		var start, end time.Time
-		var label string
+		var item timeWindow
 		switch period {
 		case "week":
 			day := localDay(now)
 			monday := day.AddDate(0, 0, -(int(day.Weekday())+6)%7)
-			start = monday.AddDate(0, 0, -i*7)
-			end = start.AddDate(0, 0, 7)
-			label = start.Format("2006-01-02")
+			item.start = monday.AddDate(0, 0, -i*7)
+			item.end = item.start.AddDate(0, 0, 7)
+			item.label = item.start.Format("2006-01-02")
 		case "month":
-			start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).AddDate(0, -i, 0)
-			end = start.AddDate(0, 1, 0)
-			label = start.Format("2006-01")
+			item.start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).AddDate(0, -i, 0)
+			item.end = item.start.AddDate(0, 1, 0)
+			item.label = item.start.Format("2006-01")
 		case "year":
 			value := now.AddDate(-i, 0, 0)
-			start = time.Date(value.Year(), time.January, 1, 0, 0, 0, 0, value.Location())
-			end = start.AddDate(1, 0, 0)
-			label = start.Format("2006")
+			item.start = time.Date(value.Year(), time.January, 1, 0, 0, 0, 0, value.Location())
+			item.end = item.start.AddDate(1, 0, 0)
+			item.label = item.start.Format("2006")
 		default:
-			start = localDay(now.AddDate(0, 0, -i))
-			end = start.AddDate(0, 0, 1)
-			label = start.Format("2006-01-02")
+			item.start = localDay(now.AddDate(0, 0, -i))
+			item.end = item.start.AddDate(0, 0, 1)
+			item.label = item.start.Format("2006-01-02")
 		}
-		total, err := countBetween(scope, start, end)
-		if err != nil {
-			return nil, err
-		}
-		videos, err := countBetween(scope.Session(&gorm.Session{}).Where(models.VideoSQL), start, end)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, TrendPoint{Date: label, Count: total, VideoCount: videos, ImageCount: total - videos})
+		result = append(result, item)
 	}
-	return result, nil
+	return result
+}
+
+func trendPoints(items []timeWindow, columns []windowColumns, values []int64) []TrendPoint {
+	result := make([]TrendPoint, 0, len(items))
+	for i, item := range items {
+		total, videos := values[columns[i].all], values[columns[i].video]
+		result = append(result, TrendPoint{Date: item.label, Count: total, VideoCount: videos, ImageCount: total - videos})
+	}
+	return result
 }
 
 func localDay(value time.Time) time.Time {
 	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, value.Location())
 }
 
-func countBetween(scope *gorm.DB, start, end time.Time) (int64, error) {
-	var count int64
-	query := scope.Session(&gorm.Session{})
-	if scope.Dialector.Name() == "sqlite" {
-		query = query.Where("julianday(created_at) >= julianday(?) AND julianday(created_at) < julianday(?)", start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano))
-	} else {
-		query = query.Where("created_at >= ? AND created_at < ?", start.UTC(), end.UTC())
+// windowCondition tests created_at against [start, end). SQLite compares
+// julianday values because stored timestamps may use mixed text formats; a
+// NULL or unparseable created_at makes the test NULL, excluding the row.
+func windowCondition(db *gorm.DB, item timeWindow) (string, []any) {
+	if db.Dialector.Name() == "sqlite" {
+		return "julianday(created_at) >= julianday(?) AND julianday(created_at) < julianday(?)", []any{item.start.UTC().Format(time.RFC3339Nano), item.end.UTC().Format(time.RFC3339Nano)}
 	}
-	err := query.Count(&count).Error
-	return count, err
+	return "created_at >= ? AND created_at < ?", []any{item.start.UTC(), item.end.UTC()}
+}
+
+// aggregate collects SUM columns for a single SELECT. CASE rather than FILTER
+// and the BIGINT cast keep SQLite and PostgreSQL results scannable as int64.
+type aggregate struct {
+	db      *gorm.DB
+	columns []string
+	args    []any
+}
+
+func newAggregate(db *gorm.DB) *aggregate { return &aggregate{db: db} }
+
+func (a *aggregate) add(expression string, args ...any) int {
+	a.columns = append(a.columns, fmt.Sprintf("CAST(COALESCE(SUM(%s), 0) AS BIGINT)", expression))
+	a.args = append(a.args, args...)
+	return len(a.columns) - 1
+}
+
+// windowColumns holds the aggregate column positions of one window's counts.
+type windowColumns struct{ all, video int }
+
+func (a *aggregate) window(item timeWindow) windowColumns {
+	condition, args := windowCondition(a.db, item)
+	return windowColumns{
+		all:   a.add("CASE WHEN "+condition+" THEN 1 ELSE 0 END", args...),
+		video: a.add("CASE WHEN "+condition+" AND "+models.VideoSQL+" THEN 1 ELSE 0 END", args...),
+	}
+}
+
+func (a *aggregate) windows(items []timeWindow) []windowColumns {
+	result := make([]windowColumns, len(items))
+	for i, item := range items {
+		result[i] = a.window(item)
+	}
+	return result
+}
+
+func (a *aggregate) scan(scope *gorm.DB) ([]int64, error) {
+	rows, err := scope.Select(strings.Join(a.columns, ", "), a.args...).Rows()
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := make([]int64, len(a.columns))
+	targets := make([]any, len(values))
+	for i := range values {
+		targets[i] = &values[i]
+	}
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("aggregate returned no row")
+	}
+	if err := rows.Scan(targets...); err != nil {
+		return nil, err
+	}
+	return values, rows.Err()
 }

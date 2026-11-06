@@ -49,7 +49,7 @@ func ImageProxy(c *gin.Context) bool {
 
 	// 查询图片信息
 	var imageModel models.Image
-	sqlResult := db.DB.Where("Url = ? OR Thumbnail = ?", cleanPath, cleanPath).Limit(1).Find(&imageModel)
+	sqlResult := mediaLookup(db.DB, cleanPath).Find(&imageModel)
 	if sqlResult.Error != nil || sqlResult.RowsAffected == 0 {
 		// 图片不存在，直接返回，交给 NoRoute 后续逻辑处理（如渲染 SPA）
 		return false
@@ -133,6 +133,11 @@ func ImageProxy(c *gin.Context) bool {
 	}
 
 	return true
+}
+
+// idx_images_url and idx_images_thumbnail serve the two arms of the OR on both dialects.
+func mediaLookup(db *gorm.DB, path string) *gorm.DB {
+	return db.Where("url = ? OR thumbnail = ?", path, path).Limit(1)
 }
 
 // proxyLocalFile 本地文件代理

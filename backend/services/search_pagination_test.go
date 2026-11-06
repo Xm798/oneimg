@@ -264,7 +264,9 @@ func TestStatsMonthEndDSTAndErrors(t *testing.T) {
 		if err := db.Create(&image).Error; err != nil {
 			t.Fatal(err)
 		}
-		count, err := countBetween(db.Model(&models.Image{}), date, end)
+		condition, args := windowCondition(db, timeWindow{start: date, end: end})
+		var count int64
+		err := db.Model(&models.Image{}).Where(condition, args...).Count(&count).Error
 		if err != nil || count != 1 {
 			t.Fatal("DST boundary count", count, err)
 		}

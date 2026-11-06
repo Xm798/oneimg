@@ -201,6 +201,34 @@ v4.5.0 新增可选 PostgreSQL 16–18，SQLite 仍为默认：
 
 完整更新摘要见 [v4.5.0 发布说明](https://github.com/mikusaa/oneimg/releases/tag/v4.5.0)。
 
+### 升级至 v4.5.1 之后版本的图片索引
+
+v4.5.1 之后的版本为 `images` 表新增 5 个索引，加速公开媒体访问、存储维护和仪表盘统计。历史外链与 API 不变，无需修改配置。
+
+- 首次启动在迁移事务中建立索引，完成前不开放服务。耗时随图片数量增长；建索引期间 PostgreSQL 阻止写入 `images`，SQLite 占用唯一写锁。图片很多时先备份，并预留短暂停机窗口。
+- `db-migrate` 导入 PostgreSQL 时同步写入这些索引，大库导入略慢。
+- PostgreSQL 可在升级前停写并手动预建同名索引，缩短启动时间：
+
+  ```sql
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_images_url ON images (url);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_images_thumbnail ON images (thumbnail);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_images_bucket_id_id ON images (bucket_id, id);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_images_user_created ON images (user_id, created_at, id);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_images_created_at_id ON images (created_at, id);
+  ```
+
+  > [!WARNING]
+  > `CONCURRENTLY` 构建失败会留下同名的无效索引，`IF NOT EXISTS` 和应用启动都会跳过它，查询退回全表扫描。每次构建后检查：
+  >
+  > ```sql
+  > SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+  > WHERE c.relname LIKE 'idx_images_%';
+  > ```
+  >
+  > `indisvalid` 为 `f` 的索引需先 `DROP INDEX CONCURRENTLY <名称>` 再重建。
+
+回滚限制：旧版本忽略这些索引，可直接回滚，无需降级数据库。需要清理时，对上述名称逐个执行 `DROP INDEX IF EXISTS`。
+
 ## 初始化与账号恢复
 
 ### 新安装

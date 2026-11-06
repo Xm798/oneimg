@@ -490,3 +490,34 @@ func TestCLIRejectsInvalidConfigurationWithoutCreatingFiles(t *testing.T) {
 		t.Fatal("migration CLI created local configuration or state", err)
 	}
 }
+
+func TestSourceWithUndeclaredImageIndexRejected(t *testing.T) {
+	path, cfg, _, _ := sourceFixture(t)
+	writer, err := database.Open(&config.Config{SqlitePath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.DB.Exec("CREATE INDEX idx_images_undeclared ON images (file_name)").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.DB.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error; err != nil {
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	source, err := openSource(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	tx := sourceTransaction(source)
+	defer tx.Rollback()
+	specs, err := tables(tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = checkSource(tx, specs, Options{Output: &bytes.Buffer{}}, cfg)
+	var failure *Failure
+	if !errors.As(err, &failure) || failure.Code != 3 || !strings.Contains(failure.Stage, "unrecognized indexes") {
+		t.Fatalf("undeclared index accepted: %v", err)
+	}
+}
