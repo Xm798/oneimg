@@ -116,16 +116,12 @@ jobs:
       - name: Backend race tests
         run: go test -race ./...
 
-  browser:
-    name: Browser ${{ matrix.browser }}
-    needs: [changes, frontend]
+  fixture:
+    name: Browser fixture
+    needs: changes
     if: needs.changes.outputs.code == 'true'
-    # Each Playwright release lists the OS images it installs browsers for; 1.56 predates ubuntu-26.04.
+    # Matches the Playwright image's Ubuntu release, so the CGO binary finds the same glibc there.
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        browser: [chromium, firefox, webkit]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -133,6 +129,46 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.10'
+      - name: Build fixture
+        run: go build -o securityfixture ./internal/securityfixture
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: securityfixture
+          path: securityfixture
+          retention-days: 1
+          if-no-files-found: error
+
+  browser:
+    name: Browser ${{ matrix.browser }}${{ matrix.database == 'postgres' && ' on PostgreSQL 17' || '' }}
+    needs: [changes, frontend, fixture]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    # The image ships the browsers and their system packages; its tag must match the locked
+    # Playwright version (frontend/pnpm-lock.yaml).
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.1-noble
+      options: --user 1001
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+        database: [sqlite, postgres]
+    services:
+      postgres:
+        # An empty image skips the service for the SQLite variants.
+        image: ${{ matrix.database == 'postgres' && 'postgres:17' || '' }}
+        env:
+          POSTGRES_DB: oneimg_test
+          POSTGRES_PASSWORD: oneimg-ci-test-only
+        options: >-
+          --health-cmd "pg_isready -U postgres -d oneimg_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 10
@@ -146,24 +182,30 @@ jobs:
         with:
           name: frontend-dist
           path: frontend/dist
-      # The lockfile pins the Playwright version, and with it the browser builds.
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ matrix.browser }}-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+          name: securityfixture
+          path: .
       - name: Browser security tests
         working-directory: frontend
+        env:
+          BROWSER: ${{ matrix.browser }}
+          DATABASE: ${{ matrix.database }}
+          ONEIMG_SECURITY_FIXTURE_COMMAND: ./securityfixture
         run: |
+          chmod +x ../securityfixture
+          # testdb rejects an empty URL, so the SQLite variants leave it unset.
+          if [ "$DATABASE" = postgres ]; then
+            export ONEIMG_TEST_POSTGRES_URL='postgres://postgres:oneimg-ci-test-only@postgres:5432/oneimg_test?sslmode=disable'
+          fi
           pnpm install --frozen-lockfile
-          pnpm exec playwright install --with-deps ${{ matrix.browser }}
-          pnpm run test:security --project=${{ matrix.browser }}
+          pnpm run test:security --project="$BROWSER"
 
   postgres:
     name: PostgreSQL ${{ matrix.postgres }}
     needs: [changes, frontend]
     if: needs.changes.outputs.code == 'true'
-    # 17 runs the browser tests, so this matrix follows the browser job's image.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -197,30 +239,7 @@ jobs:
       - name: Database, setup, services, API, local import and offline migration
         if: matrix.postgres != '17'
         run: go test ./...
-      # On 17 the race run covers the full suite.
+      # On 17 the race run covers the full suite; its browser tests run in the browser job.
       - name: PostgreSQL 17 race tests
         if: matrix.postgres == '17'
         run: go test -race ./...
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        if: matrix.postgres == '17'
-        with:
-          version: 10
-          package_json_file: frontend/package.json
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: matrix.postgres == '17'
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: matrix.postgres == '17'
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-all-${{ hashFiles('frontend/pnpm-lock.yaml') }}
-      - name: PostgreSQL 17 browser security tests
-        if: matrix.postgres == '17'
-        working-directory: frontend
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm exec playwright install --with-deps chromium firefox webkit
-          pnpm run test:security

@@ -16,7 +16,8 @@ export default defineConfig({
     { name: 'webkit', use: { ...devices['Desktop Safari'] } },
   ],
   webServer: process.env.ONEIMG_SECURITY_EXTERNAL_FIXTURE === '1' ? undefined : {
-    command: 'go run ./internal/securityfixture',
+    // CI runs a prebuilt binary inside the Playwright image, which has no Go toolchain.
+    command: process.env.ONEIMG_SECURITY_FIXTURE_COMMAND || 'go run ./internal/securityfixture',
     cwd: '..',
     url: 'http://127.0.0.1:18089/api/v1/public/config',
     reuseExistingServer: false,
