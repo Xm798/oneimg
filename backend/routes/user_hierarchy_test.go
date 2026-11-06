@@ -321,6 +321,10 @@ func TestRoleChangesClearOrKeepCodes(t *testing.T) {
 		t.Fatalf("demoted codes = %v", got)
 	}
 
+	expect(t, env.do(env.token("A"), http.MethodPatch, "/api/v1/users/"+env.id("R"), `{"role":3,"username":"still-plain"}`), http.StatusOK, "")
+	if got := env.fresh("R").Permission.Codes; !reflect.DeepEqual(got, []string{"storage:delete"}) {
+		t.Fatalf("unchanged plain role touched codes: %v", got)
+	}
 	expect(t, env.do(env.token("A"), http.MethodPatch, "/api/v1/users/"+env.id("R"), `{"role":1}`), http.StatusOK, "")
 	var raw string
 	if err := env.system.Database.DB.Raw("SELECT CAST(permission AS TEXT) FROM users WHERE id = ?", env.users["R"].ID).Scan(&raw).Error; err != nil {

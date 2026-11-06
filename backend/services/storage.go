@@ -407,8 +407,8 @@ func (s *StorageService) deleteBucketRecords(id int, bucket models.Buckets) erro
 				}
 			}
 			if len(filtered) != len(user.Permission.Buckets) {
-				// Only the buckets key is rewritten, so a code revocation that
-				// commits meanwhile is never overwritten by this row's old codes.
+				// Rewriting only the buckets key keeps the codes as currently
+				// committed, including a revocation that commits meanwhile.
 				expr, err := database.JSONSetKey(tx, "permission", "buckets", filtered)
 				if err != nil {
 					return err

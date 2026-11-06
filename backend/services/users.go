@@ -296,10 +296,10 @@ func (s *UserService) update(actor models.User, id int, username *string, role *
 		}
 		if role != nil {
 			updates["role"] = *role
-			// A promoted user starts without codes: stale codes kept on a plain
-			// user's row must not become active as admin permissions.
-			promoted := target.Role == models.RoleUser && *role == models.RoleAdmin
-			if *role == models.RoleUser || promoted {
+			// A real role change starts from an empty code set: a demoted user
+			// keeps no admin codes, and codes stored on a plain user's row were
+			// never effective, so promotion grants none of them.
+			if *role != target.Role {
 				target.Permission.Codes = []string{}
 				updates["permission"] = target.Permission
 			}

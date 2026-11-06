@@ -45,7 +45,7 @@ export const canManage = (target, user = getStoredUser()) => {
   return codes.length < held.length && codes.every(code => held.includes(code))
 }
 
-export const hasAnyPermission =(codes, user = getStoredUser()) => codes.some(code => hasPermission(code, user))
+export const hasAnyPermission = (codes, user = getStoredUser()) => codes.some(code => hasPermission(code, user))
 
 /** 与后端 CanAccessImage 一致：超级管理员的文件只有本人能管理，他人的文件需要对应权限码 */
 export const canManageImage = (image, permission, user = getStoredUser()) => {
