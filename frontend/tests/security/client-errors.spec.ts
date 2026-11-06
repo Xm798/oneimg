@@ -48,7 +48,7 @@ test('router guard logs out when /me returns 401', async ({ page }) => {
     body: JSON.stringify({ type: 'about:blank', title: 'Unauthorized', status: 401, code: 'unauthorized' }),
   }))
   await page.goto('/gallery')
-  await expect(page).toHaveURL(/\/login\?redirect=%2Fgallery$/)
+  await expect(page).toHaveURL(/\/login\?redirect=\/gallery$/)
   expect(await storedUser(page)).toBeNull()
 })
 
@@ -60,7 +60,7 @@ for (const [name, handle] of [
   test(`router guard keeps the session when /me fails with ${name}`, async ({ page }) => {
     await page.route('**/api/v1/me', handle)
     await page.goto('/gallery')
-    await expect(page.getByText('暂时无法确认登录状态，请稍后重试')).toBeVisible()
+    await expect(page.getByText('暂时无法确认登录状态，请稍后重试', { exact: true })).toBeVisible()
     await expect(page).toHaveURL(/\/gallery$/)
     expect(await storedUser(page)).not.toBeNull()
   })
