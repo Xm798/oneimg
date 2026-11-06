@@ -1,6 +1,5 @@
 import { test, expect, type Page, type Route } from '@playwright/test'
 
-// storageState seeds userInfo once per context, so a redirect to /login can observe it being cleared.
 const storedUser = (page: Page) => page.evaluate(() => localStorage.getItem('userInfo'))
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')

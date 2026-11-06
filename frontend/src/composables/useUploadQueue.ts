@@ -1,5 +1,5 @@
 import { computed, reactive, ref, watch } from 'vue'
-import { api, ApiError, errorMessage, UPLOAD_RESULT_UNKNOWN, type Image } from '@/api/client.ts'
+import { api, ApiError, errorMessage, type Image } from '@/api/client.ts'
 import { toast } from '@/components/ui/toast'
 import { useSession } from '@/composables/useSession'
 import { useTags } from '@/composables/useTags'
@@ -187,13 +187,6 @@ export const addFiles = async (input: FileList | File[]) => {
   return added
 }
 
-const problemDetail = (error: unknown, fallback: string) => {
-  if (error instanceof ApiError) return errorMessage(error, fallback)
-  if (error instanceof Error && error.message === 'Network request failed') return '网络连接失败'
-  if (error instanceof Error && error.message === UPLOAD_RESULT_UNKNOWN) return '上传结果未知，请到图库确认'
-  return fallback
-}
-
 const summarize = (batch: UploadItem[]) => {
   const duplicates = batch.filter(item => item.status === 'done' && item.duplicate).length
   const succeeded = batch.filter(item => item.status === 'done').length - duplicates
@@ -240,7 +233,7 @@ export const startUpload = async () => {
     completedBatches.value += 1
     summarize(batch)
   } catch (error) {
-    const detail = problemDetail(error, '上传失败')
+    const detail = errorMessage(error, '上传失败')
     batch.forEach(item => Object.assign(item, { status: 'failed', processing: false, error: detail, retryable: true }))
     toast.error(`上传失败：${detail}`)
     // 整批被拒绝时可能是存储刚被停用、已满或失去授权，刷新可选存储
@@ -265,7 +258,7 @@ export const importFromUrl = async (url: string) => {
     toast.success('已导入图片')
     return true
   } catch (error) {
-    const detail = problemDetail(error, '导入失败')
+    const detail = errorMessage(error, '导入失败')
     Object.assign(item, { status: 'failed', processing: false, error: detail })
     toast.error(`导入失败：${detail}`)
     if (error instanceof ApiError && error.problem?.status === 409) void loadUploadOptions(true).catch(() => undefined)

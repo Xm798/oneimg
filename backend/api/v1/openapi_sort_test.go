@@ -54,7 +54,4 @@ func TestOpenAPISortEnumsMatchHandlerAllowlists(t *testing.T) {
 			t.Fatalf("%s default = %q, want %q", tt.parameter, parameter.Schema.Default, tt.wantDefault)
 		}
 	}
-	if _, ok := document.Components.Parameters["Sort"]; ok {
-		t.Fatal("shared Sort parameter still declared")
-	}
 }

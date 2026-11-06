@@ -28,8 +28,27 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * 请求没有拿到可用的服务器响应。result_unknown 表示请求已发出但成功响应无法解析，记录可能已经创建。
+ */
+export class TransportError extends Error {
+  kind: 'network' | 'aborted' | 'result_unknown'
+  constructor(kind: TransportError['kind']) {
+    super(kind)
+    this.name = 'TransportError'
+    this.kind = kind
+  }
+}
+
+const transportMessages: Record<TransportError['kind'], string | undefined> = {
+  network: '网络连接失败',
+  aborted: undefined,
+  result_unknown: '上传结果未知，请到图库确认',
+}
+
 /** 接口错误的提示文字：限流时说明等待时间，其他情况用服务器的 detail */
 export const errorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof TransportError) return transportMessages[error.kind] ?? fallback
   if (!(error instanceof ApiError)) return fallback
   if (error.problem?.status === 429 || error.retryAfter) {
     return error.retryAfter ? `操作太频繁，请 ${error.retryAfter} 秒后再试` : '操作太频繁，请稍后再试'
@@ -45,14 +64,11 @@ export const fieldErrors = (error: unknown): Record<string, string> => {
 
 const baseURL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
 
-/** 只接受秒数形式的 Retry-After；HTTP 日期等其他形式视为未提供 */
-export const parseRetryAfter = (value: string | null): number | undefined => {
-  const seconds = Number(value)
-  return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined
+/** 错误响应可能不是 JSON（如代理返回的 HTML）；Retry-After 只接受秒数，HTTP 日期视为未提供 */
+const responseError = (status: number, payload: unknown, retryAfterHeader: string | null) => {
+  const seconds = Number(retryAfterHeader)
+  return new ApiError((payload ?? { status }) as Problem, Number.isFinite(seconds) && seconds > 0 ? seconds : undefined)
 }
-
-/** 上传请求已发出但拿不到可解析的成功响应：记录可能已经创建 */
-export const UPLOAD_RESULT_UNKNOWN = 'Upload result unknown'
 
 /** 接口返回的站内地址（如 avatar_url）加上 API 基础地址 */
 export const resolveApiURL = (path: string) => (path.startsWith('/api/') ? `${baseURL}${path}` : path)
@@ -92,9 +108,7 @@ async function requestEnvelope<T>(path: string, init: RequestInit = {}): Promise
   const response = await apiFetch(`${baseURL}/api/v1${path}`, { ...init, headers })
   if (response.status === 204) return { data: undefined as T }
   const payload = await response.json().catch(() => null)
-  if (!response.ok) {
-    throw new ApiError((payload ?? { status: response.status }) as Problem, parseRetryAfter(response.headers.get('Retry-After')))
-  }
+  if (!response.ok) throw responseError(response.status, payload, response.headers.get('Retry-After'))
   return payload as Envelope<T>
 }
 
@@ -174,16 +188,13 @@ function uploadWithProgress<T>(url: string, body: FormData, onProgress?: (value:
     const token = csrfToken()
     if (token) xhr.setRequestHeader('X-OneImg-CSRF', token)
     xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress?.(Math.round(event.loaded / event.total * 100)) }
-    xhr.onerror = () => reject(new Error('Network request failed'))
-    xhr.onabort = () => reject(new Error('Upload aborted'))
-    xhr.ontimeout = () => reject(new Error('Network request failed'))
+    xhr.onerror = xhr.ontimeout = () => reject(new TransportError('network'))
+    xhr.onabort = () => reject(new TransportError('aborted'))
     xhr.onload = () => {
       let payload: unknown = null
-      try { payload = JSON.parse(xhr.responseText || 'null') } catch { payload = null }
-      if (xhr.status < 200 || xhr.status >= 300) {
-        return reject(new ApiError((payload ?? { status: xhr.status }) as Problem, parseRetryAfter(xhr.getResponseHeader('Retry-After'))))
-      }
-      if (!payload || typeof payload !== 'object' || !('data' in payload)) return reject(new Error(UPLOAD_RESULT_UNKNOWN))
+      try { payload = JSON.parse(xhr.responseText || 'null') } catch { /* 非 JSON 响应按无内容处理 */ }
+      if (xhr.status < 200 || xhr.status >= 300) return reject(responseError(xhr.status, payload, xhr.getResponseHeader('Retry-After')))
+      if (!payload || typeof payload !== 'object' || !('data' in payload)) return reject(new TransportError('result_unknown'))
       resolve((payload as Envelope<T>).data)
     }
     xhr.send(body)

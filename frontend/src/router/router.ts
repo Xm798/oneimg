@@ -1,8 +1,9 @@
-import { apiFetch, type User } from "@/api/client.ts"
+import { api, ApiError, type User } from "@/api/client.ts"
 import { createRouter, createWebHistory, type RouteComponent, type RouteLocationNormalized, type RouteMeta, type RouteRecordRaw } from 'vue-router'
 import { canAccessRoute, setSessionUser, clearSession, type SessionUser } from '@/composables/useSession'
 import { loadSiteConfig, useSite } from '@/composables/useSite'
 import { toast } from '@/components/ui/toast'
+import { getStoredUser } from '@/utils/permissions'
 import { navItem } from './nav'
 
 const site = useSite()
@@ -76,38 +77,13 @@ const noticeTransientFailure = () => {
   toast.error('暂时无法确认登录状态，请稍后重试')
 }
 
-type MeResult = { kind: 'ok'; data: Partial<User> } | { kind: 'unauthorized' } | { kind: 'transient' }
-
-const fetchMe = async (): Promise<MeResult> => {
-  let response: Response
-  try {
-    response = await apiFetch('/api/v1/me')
-  } catch {
-    return { kind: 'transient' }
-  }
-  if (response.status === 401 || response.status === 403) return { kind: 'unauthorized' }
-  if (!response.ok) return { kind: 'transient' }
-  try {
-    const result = await response.json()
-    return { kind: 'ok', data: result?.data ?? {} }
-  } catch {
-    return { kind: 'transient' }
-  }
-}
-
 router.beforeEach(async (to) => {
   await loadSiteConfig()
   document.title = getPageTitle(to)
 
   if (to.meta.public) return true
 
-  // 验证本地登录信息
-  let userInfo: SessionUser = {}
-  try {
-    userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
-  } catch {
-    userInfo = {}
-  }
+  const userInfo: SessionUser = getStoredUser()
   // 未登录时记下原地址，登录后回到这里
   if (!userInfo.username) {
     clearSession()
@@ -115,29 +91,31 @@ router.beforeEach(async (to) => {
   }
 
   // 向服务器确认登录状态，并刷新角色、权限和改密要求
-  const me = await fetchMe()
-  if (me.kind === 'unauthorized') {
-    // 会话失效：回到登录页，登录后返回原地址
-    clearSession()
-    return loginRedirect(to)
-  }
-  if (me.kind === 'transient') {
-    // 服务器暂时不可用时沿用本地登录信息；接口本身仍会逐个鉴权，下次导航再确认
+  let me: User
+  try {
+    me = await api.me()
+  } catch (error) {
+    if (error instanceof ApiError && [401, 403].includes(Number(error.problem?.status))) {
+      // 会话失效：回到登录页，登录后返回原地址
+      clearSession()
+      return loginRedirect(to)
+    }
+    // 服务器暂时不可用或响应无法解析时沿用本地登录信息；接口本身仍会逐个鉴权，下次导航再确认
     noticeTransientFailure()
     return accessTarget(to, userInfo)
   }
-  if (!me.data.username || userInfo.username !== me.data.username) {
+  if (!me?.username || userInfo.username !== me.username) {
     clearSession()
     return '/login'
   }
 
   const current: SessionUser = {
     ...userInfo,
-    id: me.data.id ?? userInfo.id,
-    role: me.data.role,
-    permission: me.data.permission || { codes: [], bucket_ids: [] },
-    password_change_required: me.data.password_change_required,
-    bootstrap_verification_required: me.data.bootstrap_verification_required,
+    id: me.id ?? userInfo.id,
+    role: me.role,
+    permission: me.permission || { codes: [], bucket_ids: [] },
+    password_change_required: me.password_change_required,
+    bootstrap_verification_required: me.bootstrap_verification_required,
   }
   setSessionUser(current)
   return accessTarget(to, current)
