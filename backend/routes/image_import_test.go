@@ -150,8 +150,8 @@ func downloadedImport(t *testing.T, response *httptest.ResponseRecorder) bool {
 		(response.Code == http.StatusServiceUnavailable && problemCode(t, response) == "image_processing_busy")
 }
 
-// assertPermitsReleased starts two concurrent imports for the admin user; both
-// reaching the remote server proves no permit was left behind.
+// Two concurrent imports from one user both reaching the remote server proves
+// no permit was left behind.
 func (f *importFixture) assertPermitsReleased(gated *gatedServer) {
 	f.t.Helper()
 	responses := make(chan *httptest.ResponseRecorder, 2)

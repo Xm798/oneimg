@@ -44,8 +44,8 @@ func newImportLimiter() *importLimiter {
 	return &importLimiter{users: map[int]*importUsage{}}
 }
 
-// Begin takes the per-user and global permits without waiting. Permits are
-// keyed by user ID so that minting more tokens does not multiply them.
+// Begin fails instead of waiting. Permits are keyed by user ID so that minting
+// more tokens does not multiply them.
 func (l *importLimiter) Begin(userID int, maxFileSize int64) (*ImportTicket, error) {
 	ticket := &ImportTicket{limiter: l, userID: userID, maxFileSize: maxFileSize}
 	l.mu.Lock()

@@ -100,7 +100,7 @@ func NewRemoteImporter(cfg ImportConfig) *RemoteImporter {
 	return importer
 }
 
-// Begin takes the import permits for userID; the caller must End the ticket.
+// The caller must End the returned ticket.
 func (r *RemoteImporter) Begin(userID int, maxFileSize int64) (*ImportTicket, error) {
 	return r.limiter.Begin(userID, maxFileSize)
 }
@@ -221,9 +221,9 @@ func (r *rateReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// Fetch downloads rawURL, bounded by the ticket's MaxFileSize, into a disk-backed multipart form, the same shape the
-// multipart upload path produces. The caller removes the form and ends the
-// ticket. No processing slot or storage lock is held here.
+// Fetch spools rawURL, capped at the ticket's MaxFileSize, into a disk-backed
+// form shaped like a multipart upload. It takes no processing slot or storage
+// lock. The caller removes the form and ends the ticket.
 func (r *RemoteImporter) Fetch(ctx context.Context, ticket *ImportTicket, rawURL string) (*multipart.Form, *multipart.FileHeader, error) {
 	parsed, err := ValidateRemoteURL(rawURL, r.cfg.Policy)
 	if err != nil {
@@ -314,8 +314,6 @@ func (r *RemoteImporter) Fetch(ctx context.Context, ticket *ImportTicket, rawURL
 	return form, files[0], nil
 }
 
-// IsImportTimeout reports whether err is any timeout class of a remote import:
-// the rate watchdog, an idle deadline, Client.Timeout, or a dial / TLS timeout.
 func IsImportTimeout(err error) bool {
 	var netErr net.Error
 	return errors.Is(err, ErrImportTooSlow) ||

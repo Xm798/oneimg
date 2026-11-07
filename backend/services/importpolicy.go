@@ -40,9 +40,8 @@ func inAny(addr netip.Addr, prefixes []netip.Prefix) bool {
 	return false
 }
 
-// PublicAddr reports whether a remote import may connect to addr. It is not a
-// complete SSRF guarantee: a DNS64 translator using a network-specific prefix
-// can map a global IPv6 address onto a private IPv4 host.
+// PublicAddr is not a complete SSRF guarantee: a DNS64 translator using a
+// network-specific prefix can map a global IPv6 address onto a private IPv4 host.
 func PublicAddr(addr netip.Addr) bool {
 	if !addr.IsValid() || addr.Zone() != "" {
 		return false
